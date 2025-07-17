@@ -36,8 +36,7 @@ experiment/
     ├── sample1.bam
     ├── sample1.bam.bai
 ├── data/
-    ├── sample1
-        ├── sample1_allele_counts.csv
+    ├── sample1_allele_counts.csv
 ├── fastq/
     ├── sample1_S1_L001_R1.fastq.gz
     ├── sample1_S1_L001_R2.fastq.gz
