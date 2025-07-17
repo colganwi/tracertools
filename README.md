@@ -16,6 +16,33 @@ Update:
 conda env update --file environment.yml
 ```
 
+## Processing bulk data
+
+1. Place .fastq files in a directory named `fastq`.
+2. Name create CSV sample sheet with prefix and sample columns:
+```
+prefix,sample
+sample1_S1_L001,sample1
+```
+3. Copy `/templates/bulk_paired.slurm` to your working directory.
+4. Submit the job array with:
+```bash
+sbatch bulk_paired.slurm
+```
+5. After all jobs are complete, you will have a directory for each sample with the following structure:
+experiment/
+├── bam/
+    ├── sample1.bam
+    ├── sample1.bam.bai
+├── data/
+    ├── sample1
+        ├── sample1_allele_counts.csv
+├── fastq/
+    ├── sample1_S1_L001_R1.fastq.gz
+    ├── sample1_S1_L001_R2.fastq.gz
+```
+
+
 ## Processing 10X data
 
 1. Place .fastq files in a directory named `fastq`.
