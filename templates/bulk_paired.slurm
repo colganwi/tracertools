@@ -14,7 +14,7 @@
 samples_file="$1"
 if [[ -z "$samples_file" ]]; then
   echo "Usage: $0 <samples.csv>"
-  echo "  samples.csv should have lines: sample_prefix,sample"
+  echo "  samples.csv should have lines: prefix,sample"
   exit 1
 fi
 
@@ -31,30 +31,41 @@ idx=$((SLURM_ARRAY_TASK_ID - 1))
 line="${lines[$idx]}"
 
 # parse prefix and sample
-sample_prefix="$(echo "$line" | cut -d',' -f1)"
+prefix="$(echo "$line" | cut -d',' -f1)"
 sample="$(echo "$line" | cut -d',' -f2)"
+echo "Processing sample: $sample with prefix: $prefix"
 
 # locate FASTQ files
-r1_file="../PETS/${sample_prefix}_L001_R1_001.fastq.gz"
-r2_file="../PETS/${sample_prefix}_L001_R2_001.fastq.gz"
+r1_file="./fastq/${prefix}_R1.fastq.gz"
+r2_file="./fastq/${prefix}_R2.fastq.gz"
 
 # Step 1: cutadapt for paired-end reads
+mkdir -p ./bam
 cutadapt -g "$forward_primer" -G "$reverse_primer" \
-  -o "${sample_prefix}_R1.trim.fastq" -p "${sample_prefix}_R2.trim.fastq" \
+  -o "./bam/${prefix}_R1.trim.fastq" -p "./bam/${prefix}_R2.trim.fastq" \
   "$r1_file" "$r2_file"
 
 # Step 2: bowtie2 alignment
 bowtie2 -x "$ref" \
-  -1 "${sample_prefix}_R1.trim.fastq" -2 "${sample_prefix}_R2.trim.fastq" \
-  -S "${sample_prefix}.sam" --threads 4 -k 1
+  -1 "./bam/${prefix}_R1.trim.fastq" -2 "./bam/${prefix}_R2.trim.fastq" \
+  -S "./bam/${prefix}.sam" --threads 4 -k 1
 
 # clean up trimmed files
-rm "${sample_prefix}_R1.trim.fastq" "${sample_prefix}_R2.trim.fastq"
+rm "./bam/${prefix}_R1.trim.fastq" "./bam/${prefix}_R2.trim.fastq"
 
 # Step 3: samtools view, sort, index
-samtools view -bS "${sample_prefix}.sam" \
-  | samtools sort -o "${sample}.sorted.bam"
-samtools index "${sample}.sorted.bam"
+samtools view -bS "./bam/${prefix}.sam" | samtools sort -o "./bam/${sample}.bam"
+samtools index "./bam/${sample}.bam"
+
+# Step 4: call alleles
+mkdir -p ./data
+tracertools alleles-from-bam \
+  --bam "./bam/${sample}.bam" \
+  --out "./data/${sample}/${sample}_allele_counts.csv" \
+  --barcode_start 270 \
+  --barcode_end 300 \
+  --site_positions "{'RNF2':332,'HEK3':380,'EMX1':448}" \
+  --min_reads 2
 
 # final clean up
-rm "${sample_prefix}.sam"
+rm "./bam/${prefix}.sam"
