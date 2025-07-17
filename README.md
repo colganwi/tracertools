@@ -30,8 +30,8 @@ sample1_S1_L001,sample1
 sbatch bulk_paired.slurm
 ```
 5. After all jobs are complete, you will have a directory for each sample with the following structure:
-experiment/
 ```
+experiment/
 ├── bam/
     ├── sample1.bam
     ├── sample1.bam.bai
