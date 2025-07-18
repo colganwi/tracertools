@@ -7,4 +7,4 @@ dependencies:
   - ipykernel
   - pip
   - pip:
-      - .
+      - git+https://github.com/colganwi/tracertools.git
