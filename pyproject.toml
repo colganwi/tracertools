@@ -24,6 +24,7 @@ dependencies = [
     "pysam",
     "Levenshtein",
     "tqdm",
+    "fastcluster"
 ]
 
 scripts.tracertools = "tracertools.cli:main"

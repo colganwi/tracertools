@@ -8,6 +8,8 @@
 #SBATCH --output=cellranger-%j.out     # name of output file.  %j is jobid
 #SBATCH --array=1-4                    # array of jobs to submit
 
+source activate tracertools
+
 # Update list of samples
 samples=(
   "embryo27_t1"

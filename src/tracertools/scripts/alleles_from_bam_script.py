@@ -70,7 +70,7 @@ def call_alleles_10x(param):
         for name, pos in sites.items():
             allele = insertion_from_alignment(read.query_sequence, read.cigarstring, pos, read.reference_start)
             if name == "EMX1" and allele == "CTTGGG":
-                allele = "None"
+                allele = "-"
             alleles.append(allele)
         key = (read.get_tag('UB'),read.get_tag('CB'), intID, *alleles)
         umi_counts[key] += 1
