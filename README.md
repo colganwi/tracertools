@@ -80,7 +80,7 @@ conda activate tracertools
 tracertools count-integrations --path ./data/
 ```
 
-### Edit fraction
+### Edit fraction per sample
 
 ```bash
 conda activate tracertools
