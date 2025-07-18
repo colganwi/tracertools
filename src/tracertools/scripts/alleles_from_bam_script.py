@@ -99,7 +99,7 @@ def call_alleles_10x(param):
 def call_alleles_bulk(bam, barcode_start, barcode_end, sites, min_reads=10, extract_barcode=False):
     # Process reads
     bamfile = pysam.AlignmentFile(bam, "rb")
-    molecules = defaultdict(lambda: { **{ name: None for name in sites.keys() }, "intID": None })
+    molecules = defaultdict(lambda: { **{ name: None for name in sites.keys() }, "intID": None})
     total_reads = bamfile.count()
     bamfile.reset()
     for read in tqdm(bamfile.fetch(until_eof=True), total=total_reads, mininterval=20, desc="TS"):
@@ -114,12 +114,15 @@ def call_alleles_bulk(bam, barcode_start, barcode_end, sites, min_reads=10, extr
                     pos,
                     read.reference_start
                 )
-            molecules[read.query_name][name] = allele
+            if allele is not None:
+                molecules[read.query_name][name] = allele
     # Aggregate alleles
     alleles = pd.DataFrame.from_dict(molecules, orient='index')
     alleles = alleles.dropna(axis=0, how='any')
+    for col in sites.keys():
+        alleles = alleles[~alleles[col].str.contains("N")]
     if "EMX1" in alleles.columns:
-        alleles["EMX1"] = alleles["EMX1"].replace("CTTGGG", "None")
+        alleles["EMX1"] = alleles["EMX1"].replace("CTTGGG", "-")
     alleles["readCount"] = 1
     alleles = alleles.groupby(["intID"] + list(sites.keys())).agg({"readCount":"sum"}).reset_index()
     alleles = alleles.query(f"readCount >= {min_reads}")

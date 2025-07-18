@@ -9,6 +9,8 @@ from sklearn.mixture import GaussianMixture
 
 def insertion_from_alignment(sequence, cigar, pos, ref_begin = 0, window=2):
     """Extract insertion sequence from a read alignment."""
+    if pos < ref_begin:
+        return None
     pos = pos - ref_begin
     ref_pos = 0
     seq_pos = 0
@@ -30,9 +32,9 @@ def insertion_from_alignment(sequence, cigar, pos, ref_begin = 0, window=2):
         if ref_pos > pos + window:
             break
     if ref_pos < pos:
-        return pd.NA
+        return None
     elif insertions == "":
-        return "None"
+        return "-"
     return insertions
 
 def barcode_from_alignment(sequence, cigar, start, stop, ref_begin = 0):
