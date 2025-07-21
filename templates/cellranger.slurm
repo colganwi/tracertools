@@ -40,7 +40,7 @@ mkdir -p ./data
 sample=${samples[($SLURM_ARRAY_TASK_ID-1)]}
 echo "Processing sample: ${sample}"
 
-# Run cellranger count 
+# Run cellranger count
 libraries_csv="${sample}_libraries.csv"
 echo "Running cellranger count for sample: ${sample}"
 cellranger count \
