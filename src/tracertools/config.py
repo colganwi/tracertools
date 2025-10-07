@@ -245,37 +245,15 @@ def set_theme(figsize=(3, 3), dpi=200):
 
 
 # Names
-preedited_clone_names = {0:"Normal",1:"Clone 1",2:"Clone 2",3:"Clone 3",4:"Clone 4"}
-site_ids = {"RNF2":1,"HEK3":2,"EMX1":3}
-site_names = {"RNF2":"Edit site 1", "HEK3":"Edit site 2", "EMX1":"Edit site 3"}
-edit_ids = {'EMX1': {'-': 0,
-  'GGACA': 1,
-  'ACAAT': 2,
-  'CCCTA': 3,
-  'AGTAC': 4,
-  'CCGAT': 5,
-  'CCTTT': 6,
-  'ATCAA': 7,
-  'ATTCG': 8},
- 'RNF2': {'-': 0,
-  'ACAGT': 1,
-  'ACTTA': 2,
-  'TTCCT': 3,
-  'TATAT': 4,
-  'GTTCA': 5,
-  'TGCCA': 6,
-  'TCCAA': 7,
-  'ACTCC': 8},
- 'HEK3': {'-': 0,
-  'GATAG': 1,
-  'AATCG': 2,
-  'GCAAG': 3,
-  'GCGCC': 4,
-  'CTTTG': 5,
-  'ATCAA': 6,
-  'CTCTC': 7,
-  'ATTTA': 8}}
+preedited_clone_names = {0: "Normal", 1: "Clone 1", 2: "Clone 2", 3: "Clone 3", 4: "Clone 4"}
+site_ids = {"RNF2": 1, "HEK3": 2, "EMX1": 3}
+site_names = {"RNF2": "Edit site 1", "HEK3": "Edit site 2", "EMX1": "Edit site 3"}
+edit_ids = {
+    "EMX1": {"-": 0, "GGACA": 1, "ACAAT": 2, "CCCTA": 3, "AGTAC": 4, "CCGAT": 5, "CCTTT": 6, "ATCAA": 7, "ATTCG": 8},
+    "RNF2": {"-": 0, "ACAGT": 1, "ACTTA": 2, "TTCCT": 3, "TATAT": 4, "GTTCA": 5, "TGCCA": 6, "TCCAA": 7, "ACTCC": 8},
+    "HEK3": {"-": 0, "GATAG": 1, "AATCG": 2, "GCAAG": 3, "GCGCC": 4, "CTTTG": 5, "ATCAA": 6, "CTCTC": 7, "ATTTA": 8},
+}
 edit_names = {}
 for site in edit_ids:
-    edit_names[site] = {edit:f"LM {edit_ids[site][edit]}" for edit in edit_ids[site] if edit != "-"}
-    edit_names[site].update({"-":"Unedited"})
+    edit_names[site] = {edit: f"LM {edit_ids[site][edit]}" for edit in edit_ids[site] if edit != "-"}
+    edit_names[site].update({"-": "Unedited"})

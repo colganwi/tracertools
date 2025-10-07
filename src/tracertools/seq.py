@@ -1,16 +1,16 @@
 import re
+from collections.abc import Sequence
 
 import Levenshtein
 import numpy as np
 import pandas as pd
 import pysam
 from sklearn.mixture import GaussianMixture
-from typing import Sequence
 
 from .config import edit_ids
 
 
-def insertion_from_alignment(sequence, cigar, pos, ref_begin = 0, window=2):
+def insertion_from_alignment(sequence, cigar, pos, ref_begin=0, window=2):
     """Extract insertion sequence from a read alignment."""
     if pos < ref_begin:
         return None
@@ -18,19 +18,19 @@ def insertion_from_alignment(sequence, cigar, pos, ref_begin = 0, window=2):
     ref_pos = 0
     seq_pos = 0
     insertions = ""
-    for op in re.findall(r'(\d+)([MIDNSHP])', cigar):
+    for op in re.findall(r"(\d+)([MIDNSHP])", cigar):
         length, operation = int(op[0]), op[1]
-        if operation == 'M':
+        if operation == "M":
             seq_pos += length
             ref_pos += length
         elif operation == "S":
             seq_pos += length
-        elif operation == 'D':
+        elif operation == "D":
             ref_pos += length
-        elif operation == 'I':
+        elif operation == "I":
             if (pos - window <= ref_pos) and (ref_pos <= pos + window):
                 indel_pos = seq_pos - ref_pos + pos
-                insertions += sequence[indel_pos:indel_pos + length]
+                insertions += sequence[indel_pos : indel_pos + length]
             seq_pos += length
         if ref_pos > pos + window:
             break
@@ -40,20 +40,21 @@ def insertion_from_alignment(sequence, cigar, pos, ref_begin = 0, window=2):
         return "-"
     return insertions
 
-def barcode_from_alignment(sequence, cigar, start, stop, ref_begin = 0):
+
+def barcode_from_alignment(sequence, cigar, start, stop, ref_begin=0):
     """Extract barcode sequence from a read alignment."""
     aligned_sequence = ""
     start = start - ref_begin
     stop = stop - ref_begin
     seq_pos = 0
     ref_pos = 0
-    for op in re.findall(r'(\d+)([MIDNSHP=X])', cigar):
+    for op in re.findall(r"(\d+)([MIDNSHP=X])", cigar):
         length, operation = int(op[0]), op[1]
-        if operation in ["M","S"]:
+        if operation in ["M", "S"]:
             if ref_pos + length > start:
                 sub_start = max(0, start - ref_pos)
                 sub_end = min(length, stop - ref_pos)
-                aligned_sequence += sequence[seq_pos + sub_start:seq_pos + sub_end]
+                aligned_sequence += sequence[seq_pos + sub_start : seq_pos + sub_end]
             seq_pos += length
             if operation == "M":
                 ref_pos += length
@@ -64,13 +65,13 @@ def barcode_from_alignment(sequence, cigar, start, stop, ref_begin = 0):
     return aligned_sequence
 
 
-def correct_to_whitelist(seqs, whitelist, max_dist = 2):
+def correct_to_whitelist(seqs, whitelist, max_dist=2):
     """Correct sequences to a whitelist using Levenshtein distance"""
     unique_seqs = list(dict.fromkeys(seqs))
     corrections = {}
     for seq in unique_seqs:
         closest_match = None
-        min_distance = float('inf')
+        min_distance = float("inf")
         for white_seq in whitelist:
             distance = Levenshtein.distance(seq, white_seq)
             if distance <= max_dist and distance < min_distance:
@@ -81,16 +82,16 @@ def correct_to_whitelist(seqs, whitelist, max_dist = 2):
     return corrected_seqs
 
 
-def sigma_threshold(x, max_sigma = 3, n_components = 2, min_threshold = 1,log = False):
+def sigma_threshold(x, max_sigma=3, n_components=2, min_threshold=1, log=False):
     """Estimate threshold based on Gaussian Mixture Model."""
     # If more than 5000 values sample
     if len(x) > 5000:
         x = x.sample(5000)
     if log:
         x = np.log1p(x)
-    gmm = GaussianMixture(n_components=n_components, random_state=0).fit(x.values.reshape(-1, 1)) 
+    gmm = GaussianMixture(n_components=n_components, random_state=0).fit(x.values.reshape(-1, 1))
     high_component = np.argmax(gmm.means_)
-    threshold = gmm.means_[high_component,0] - max_sigma * np.sqrt(gmm.covariances_[high_component,0,0])
+    threshold = gmm.means_[high_component, 0] - max_sigma * np.sqrt(gmm.covariances_[high_component, 0, 0])
     if log:
         threshold = np.expm1(threshold)
     return max(min_threshold, threshold)
@@ -98,15 +99,15 @@ def sigma_threshold(x, max_sigma = 3, n_components = 2, min_threshold = 1,log = 
 
 def select_allele(allele, sites=["RNF2", "HEK3", "EMX1"]):
     """Select allele given conflicting sequencing reads."""
-    agg_funcs = {col: 'sum' if col in ["UMI", "readCount", "frac"] else 'first' for col in allele.columns}
+    agg_funcs = {col: "sum" if col in ["UMI", "readCount", "frac"] else "first" for col in allele.columns}
     aggregated = allele.groupby("n_alleles").agg(agg_funcs)
     n_edits = 0
     for site in sites:
         values = list(allele[site].dropna().unique())
         if len(values) == 1:
             continue
-        elif len(values) == 2 and 'None' in values:
-            aggregated[site] = values[0] if values[1] == 'None' else values[1]
+        elif len(values) == 2 and "None" in values:
+            aggregated[site] = values[0] if values[1] == "None" else values[1]
             n_edits += 1
         elif len(values) > 1:
             return allele
@@ -155,25 +156,12 @@ def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> 
     keep_first_cols = [c for c in g2.columns if c not in excluded]
     agg_dict = {c: "sum" for c in num_cols}
     agg_dict.update({c: "first" for c in keep_first_cols})
-    collapsed = (
-        to_collapse.groupby(keys, sort=False)
-        .agg(agg_dict)
-        .reset_index()
-    )
+    collapsed = to_collapse.groupby(keys, sort=False).agg(agg_dict).reset_index()
 
     def pick_site(col: str) -> pd.Series:
         subset = to_collapse[[*keys, col]]
-        pref = (
-            subset[subset[col] != "-"]
-            .dropna()
-            .drop_duplicates(subset=keys)
-            .set_index(keys)[col]
-        )
-        uniq = (
-            subset.dropna()
-            .drop_duplicates(subset=keys + [col])
-            .groupby(keys, sort=False)[col].first()
-        )
+        pref = subset[subset[col] != "-"].dropna().drop_duplicates(subset=keys).set_index(keys)[col]
+        uniq = subset.dropna().drop_duplicates(subset=keys + [col]).groupby(keys, sort=False)[col].first()
         out_series = uniq.copy()
         out_series.loc[pref.index] = pref
         return out_series
@@ -186,7 +174,8 @@ def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> 
     result = pd.concat([not_two, unresolved_pairs, collapsed], ignore_index=True)
     return result
 
-def read_sam(file,verbose=False):
+
+def read_sam(file, verbose=False):
     """Read SAM file into a DataFrame."""
     samfile = pysam.AlignmentFile(file, "rb")
     records = []
@@ -212,19 +201,24 @@ def read_sam(file,verbose=False):
     return df
 
 
-def alleles_to_characters(alleles,edit_ids = edit_ids,min_prob = None,other_id = 9,order = None,index = "cellBC"):
+def alleles_to_characters(alleles, edit_ids=edit_ids, min_prob=None, other_id=9, order=None, index="cellBC"):
     """Convert allele table to character matrix"""
     characters = alleles.copy()
-    if isinstance(index,str):
+    if isinstance(index, str):
         index = [index]
     # Map alleles to characters
     for site, mapping in edit_ids.items():
         characters[site] = characters[site].map(mapping).fillna(other_id).astype(int)
         if min_prob is not None and f"{site}_prob" in characters.columns:
-            characters.loc[characters[f"{site}_prob"] < min_prob,site] = -1
-    characters = pd.melt(characters[index + ["intID"] + list(edit_ids.keys())],
-                               id_vars = index + ["intID"],var_name = "site",value_name = "allele")
-    characters = characters.pivot_table(index = index,columns = ["intID","site"],values = "allele").fillna(-1).astype(int)
+            characters.loc[characters[f"{site}_prob"] < min_prob, site] = -1
+    characters = pd.melt(
+        characters[index + ["intID"] + list(edit_ids.keys())],
+        id_vars=index + ["intID"],
+        var_name="site",
+        value_name="allele",
+    )
+    characters = characters.pivot_table(index=index, columns=["intID", "site"], values="allele").fillna(-1).astype(int)
+
     # sort by max allele fraction
     def max_fraction(int_id):
         int_data = characters.xs(int_id, level=0, axis=1)
@@ -233,9 +227,10 @@ def alleles_to_characters(alleles,edit_ids = edit_ids,min_prob = None,other_id =
         valid_counts = counts.loc[lambda x: x.index > 0]  # Exclude -1 and 0
         max_fraction_value = (valid_counts / total_counts).max().max()
         return max_fraction_value
+
     if order is None:
         order = sorted(characters.columns.levels[0], key=max_fraction, reverse=True)
     characters = characters.reindex(order, level=0, axis=1)
     # Reindex
-    characters.columns = ['{}-{}'.format(intID, site) for intID, site in characters.columns]
+    characters.columns = [f"{intID}-{site}" for intID, site in characters.columns]
     return characters

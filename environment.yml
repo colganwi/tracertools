@@ -9,4 +9,3 @@ dependencies:
   - pip:
       - git+https://github.com/colganwi/tracertools.git
       - pycea-lineage
-      

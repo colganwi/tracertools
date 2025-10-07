@@ -1,5 +1,3 @@
-from typing import Any, Dict, Optional
-
 import ete3
 import networkx as nx
 import numpy as np
@@ -8,10 +6,30 @@ from numba import njit
 from pycea.utils import get_leaves, get_root
 
 NUM_TO_AA = {
-    0:'A',1:'R',2:'N',3:'D',4:'C',5:'Q',6:'E',7:'G',8:'H',
-    9:'I',10:'L',11:'K',12:'M',13:'F',14:'P',15:'S',16:'T',17:'W',18:'Y',19:'V',-1:'-'
+    0: "A",
+    1: "R",
+    2: "N",
+    3: "D",
+    4: "C",
+    5: "Q",
+    6: "E",
+    7: "G",
+    8: "H",
+    9: "I",
+    10: "L",
+    11: "K",
+    12: "M",
+    13: "F",
+    14: "P",
+    15: "S",
+    16: "T",
+    17: "W",
+    18: "Y",
+    19: "V",
+    -1: "-",
 }
 AAS = [NUM_TO_AA[i] for i in range(20)]
+
 
 def save_edit_distance(number_of_states: int, basepath: str) -> None:
     """Generate a random edit distance matrix with eigen decomposition.
@@ -105,6 +123,7 @@ def tree_to_newick(
     -------
         A newick string representing the topology of the tree
     """
+
     def _to_newick_str(g, node):
         is_leaf = g.out_degree(node) == 0
         weight_string = ""
@@ -120,14 +139,13 @@ def tree_to_newick(
             if is_leaf
             else (
                 "("
-                + ",".join(
-                    _to_newick_str(g, child) for child in g.successors(node)
-                )
+                + ",".join(_to_newick_str(g, child) for child in g.successors(node))
                 + ")"
                 + name_string
                 + weight_string
             )
         )
+
     root = [node for node in tree if tree.in_degree(node) == 0][0]
     return _to_newick_str(tree, root) + ";"
 
@@ -143,7 +161,7 @@ def _safe_label(name: str) -> str:
 
 def newick_to_tree(
     newick: str,
-    length_attr: Optional[str] = "length",
+    length_attr: str | None = "length",
     midpoint_root: bool = False,
 ) -> nx.DiGraph:
     """Parse Newick via ete3 and return a directed NetworkX DiGraph).
@@ -191,12 +209,13 @@ def newick_to_tree(
 
     return G
 
+
 @njit
 def hamming_distance(arr1, arr2):
     """Compute Hamming distance between two cells character arrays"""
     valid_mask = (arr1 != -1) & (arr2 != -1)
     hamming_distance = 0
-    for x, y in zip(arr1[valid_mask], arr2[valid_mask]):
+    for x, y in zip(arr1[valid_mask], arr2[valid_mask], strict=False):
         if x == y:
             pass
         elif x == 0 or y == 0:
@@ -220,14 +239,14 @@ def bfs_names(tree):
 def get_edit_frac(characters):
     """Compute the fraction of edited characters."""
     characters = np.array(characters)
-    n_detected = np.sum(characters > -1,axis = 1)
-    n_edited = np.sum(characters > 0,axis = 1)
-    return n_edited/n_detected
+    n_detected = np.sum(characters > -1, axis=1)
+    n_edited = np.sum(characters > 0, axis=1)
+    return n_edited / n_detected
 
 
 def get_detection_rate(characters):
     """Compute the fraction of detected characters."""
-    return np.sum(characters > 0)/len(characters)
+    return np.sum(characters > 0) / len(characters)
 
 
 def mask_truncal_edits(characters):
@@ -239,6 +258,6 @@ def mask_truncal_edits(characters):
         if len(value_counts[(value_counts.index != 0) & (value_counts.index != -1)]) > 0:
             most_common_value = value_counts[(value_counts.index != 0) & (value_counts.index != -1)].idxmax()
             fraction = (filtered_values == most_common_value).sum() / len(filtered_values)
-            if fraction < .95:
+            if fraction < 0.95:
                 masked_characters[column] = characters[column]
     return pd.DataFrame(masked_characters)
