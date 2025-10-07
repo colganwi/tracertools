@@ -27,8 +27,8 @@ transcriptome="/lab/solexa_weissman/PEtracing_shared/Reference/cellranger/mm10_P
 transcriptome=$(realpath "$transcriptome")
 
 
-# Temarborium for the libraries.csv content
-libraries_temarborium="fastqs,sample,library_type
+# Template for the libraries.csv content
+libraries_template="fastqs,sample,library_type
 {fastq_dir},{sample}_TS,Gene Expression
 {fastq_dir},{sample}_GEX,Gene Expression"
 
@@ -40,8 +40,9 @@ mkdir -p ./data
 sample=${samples[($SLURM_ARRAY_TASK_ID-1)]}
 echo "Processing sample: ${sample}"
 
-# Run cellranger count 
+# Run cellranger count
 libraries_csv="${sample}_libraries.csv"
+echo "$libraries_template" | sed "s/{sample}/$sample/g" | sed "s|{fastq_dir}|$fastq_dir|g" > "$libraries_csv"
 echo "Running cellranger count for sample: ${sample}"
 cellranger count \
   --id="$sample" \

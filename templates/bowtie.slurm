@@ -53,4 +53,3 @@ tracertools alleles-from-bam \
   --barcode_end 300 \
   --site_positions "${sites}" \
   --min_reads 2
-
