@@ -4,6 +4,7 @@ import multiprocessing as mp
 import sys
 from collections import defaultdict
 from pathlib import Path
+import os
 
 import pandas as pd
 import pysam
@@ -139,6 +140,7 @@ def alleles_from_bam(bam,
                     **kwargs):
      # Parse the arguments
     sites = ast.literal_eval(site_positions)
+    # print working directory
     bamfile = pysam.AlignmentFile(bam, "rb")
     intIDs = [ref for ref in bamfile.references if "intID" in ref]
     has_cb = has_cb_tag(bamfile)
@@ -148,11 +150,11 @@ def alleles_from_bam(bam,
         lock = mp.Manager().Lock()
         pd.DataFrame(columns=["intID", "cellBC"] + list(sites.keys()) + ["UMI", "readCount"]).to_csv(out, index=False)
         if extract_barcode:
-            call_alleles_10x((intIDs[0],bamfile,barcode_start,barcode_end,sites,min_reads,extract_barcode,out,lock))
+            call_alleles_10x((intIDs[0],bam,barcode_start,barcode_end,sites,min_reads,extract_barcode,out,lock))
         else:
             with mp.Pool(processes=8) as pool:
                 _ = list(tqdm(pool.imap_unordered(call_alleles_10x,
-                [(intID,bamfile,barcode_start,barcode_end,sites,min_reads,extract_barcode,out,lock) for intID in intIDs]),
+                [(intID,bam,barcode_start,barcode_end,sites,min_reads,extract_barcode,out,lock) for intID in intIDs]),
                 total=len(intIDs),mininterval=60, desc="TS"))
     # Call alleles bulk
     else:

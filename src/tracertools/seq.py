@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 import pysam
 from sklearn.mixture import GaussianMixture
+from typing import Sequence
+
+from .config import edit_ids
 
 
 def insertion_from_alignment(sequence, cigar, pos, ref_begin = 0, window=2):
@@ -114,6 +117,75 @@ def select_allele(allele, sites=["RNF2", "HEK3", "EMX1"]):
         return allele
 
 
+def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> pd.DataFrame:
+    """Resolve alleles with conflicting sequencing reads."""
+    if sites is None:
+        default_sites = ["RNF2", "HEK3", "EMX1"]
+        sites = [c for c in default_sites if c in df.columns]
+    keys = ["intID", "cellBC"]
+    out = df.copy()
+    gc_keys = out.groupby(keys, sort=False)
+    out["n_alleles"] = gc_keys["intID"].transform("size")
+    g2 = out[out["n_alleles"] == 2].copy()
+    if g2.empty or not sites:
+        return out
+    g2_gc = g2.groupby(keys, sort=False)
+    # total uniques
+    u_total = g2_gc[sites].nunique(dropna=True)
+    g2_masked = g2.copy()
+    for s in sites:
+        g2_masked[s] = g2_masked[s].where(g2_masked[s] != "-")
+    u_non_none = g2_masked.groupby(keys, sort=False)[sites].nunique(dropna=True)
+    # does the pair contain a literal '-' for each site?
+    has_none = g2.groupby(keys, sort=False)[sites].apply(lambda df_: df_.eq("-").any(axis=0))
+    # resolvable if pair is {x, '-'}
+    resolvable = (u_total.eq(2)) & (u_non_none.eq(1)) & has_none
+    # any conflict (>1 distinct non-'None' values at any site)?
+    conflict_any = (u_non_none > 1).any(axis=1)
+    # good pairs: exactly one resolvable site, no conflicts elsewhere
+    edit_counts = resolvable.sum(axis=1)
+    good_pairs = (~conflict_any) & (edit_counts == 1)
+    if not good_pairs.any():
+        return out
+    good_idx = resolvable.index[good_pairs]
+    idx_mask = g2.set_index(keys).index.isin(good_idx)
+    to_collapse = g2.loc[idx_mask]
+    num_cols = [c for c in ["UMI", "readCount", "frac"] if c in g2.columns]
+    excluded = set(keys + list(sites) + ["n_alleles"] + num_cols)
+    keep_first_cols = [c for c in g2.columns if c not in excluded]
+    agg_dict = {c: "sum" for c in num_cols}
+    agg_dict.update({c: "first" for c in keep_first_cols})
+    collapsed = (
+        to_collapse.groupby(keys, sort=False)
+        .agg(agg_dict)
+        .reset_index()
+    )
+
+    def pick_site(col: str) -> pd.Series:
+        subset = to_collapse[[*keys, col]]
+        pref = (
+            subset[subset[col] != "-"]
+            .dropna()
+            .drop_duplicates(subset=keys)
+            .set_index(keys)[col]
+        )
+        uniq = (
+            subset.dropna()
+            .drop_duplicates(subset=keys + [col])
+            .groupby(keys, sort=False)[col].first()
+        )
+        out_series = uniq.copy()
+        out_series.loc[pref.index] = pref
+        return out_series
+
+    for s in sites:
+        collapsed[s] = pick_site(s).reindex(collapsed.set_index(keys).index).values
+    collapsed["n_alleles"] = 1
+    unresolved_pairs = g2.loc[~idx_mask]
+    not_two = out[out["n_alleles"] != 2]
+    result = pd.concat([not_two, unresolved_pairs, collapsed], ignore_index=True)
+    return result
+
 def read_sam(file,verbose=False):
     """Read SAM file into a DataFrame."""
     samfile = pysam.AlignmentFile(file, "rb")
@@ -138,3 +210,32 @@ def read_sam(file,verbose=False):
     if verbose:
         print(f"{n} reads with {n_unmapped} unmapped ({n_unmapped/n*100:.2f}%)")
     return df
+
+
+def alleles_to_characters(alleles,edit_ids = edit_ids,min_prob = None,other_id = 9,order = None,index = "cellBC"):
+    """Convert allele table to character matrix"""
+    characters = alleles.copy()
+    if isinstance(index,str):
+        index = [index]
+    # Map alleles to characters
+    for site, mapping in edit_ids.items():
+        characters[site] = characters[site].map(mapping).fillna(other_id).astype(int)
+        if min_prob is not None and f"{site}_prob" in characters.columns:
+            characters.loc[characters[f"{site}_prob"] < min_prob,site] = -1
+    characters = pd.melt(characters[index + ["intID"] + list(edit_ids.keys())],
+                               id_vars = index + ["intID"],var_name = "site",value_name = "allele")
+    characters = characters.pivot_table(index = index,columns = ["intID","site"],values = "allele").fillna(-1).astype(int)
+    # sort by max allele fraction
+    def max_fraction(int_id):
+        int_data = characters.xs(int_id, level=0, axis=1)
+        counts = int_data.apply(pd.Series.value_counts, axis=0).fillna(0)
+        total_counts = counts.sum(axis=0)
+        valid_counts = counts.loc[lambda x: x.index > 0]  # Exclude -1 and 0
+        max_fraction_value = (valid_counts / total_counts).max().max()
+        return max_fraction_value
+    if order is None:
+        order = sorted(characters.columns.levels[0], key=max_fraction, reverse=True)
+    characters = characters.reindex(order, level=0, axis=1)
+    # Reindex
+    characters.columns = ['{}-{}'.format(intID, site) for intID, site in characters.columns]
+    return characters
