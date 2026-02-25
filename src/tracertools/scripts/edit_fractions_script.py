@@ -34,7 +34,7 @@ def edit_fractions(path, sites, **kwargs):
         id_vars=["readCount", "sample", "intID"], value_name="edit", var_name="site"
     )
     edit_frac = (
-        edit_counts.query("edit != '-'").groupby(["sample", "site"])["readCount"].sum()
+        edit_counts.query("edit != '*'").groupby(["sample", "site"])["readCount"].sum()
         / edit_counts.groupby(["sample", "site"])["readCount"].sum()
     ).reset_index(name="edit_frac")
     edit_frac.to_csv(base_path / "edit_fractions.csv")

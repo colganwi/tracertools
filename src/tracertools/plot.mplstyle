@@ -1,0 +1,17 @@
+axes.titlesize     : 11
+axes.labelsize     : 10
+xtick.labelsize    : 10
+ytick.labelsize    : 10
+lines.linewidth    : 2
+axes.spines.right  : False
+axes.spines.top    : False
+font.family        : Arial
+axes.linewidth  : 1
+xtick.major.width : 1
+ytick.major.width : 1
+legend.fontsize: 10
+legend.title_fontsize: 10
+legend.labelspacing: 0.15
+legend.handletextpad: 0.5
+legend.handlelength: 1.5
+legend.frameon: False

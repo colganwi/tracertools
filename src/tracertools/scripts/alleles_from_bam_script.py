@@ -83,8 +83,10 @@ def call_alleles_10x(param):
         alleles = []
         for name, pos in sites.items():
             allele = insertion_from_alignment(read.query_sequence, read.cigarstring, pos, read.reference_start)
-            if name == "EMX1" and allele == "CTTGGG":
-                allele = "-"
+            if name == "EMX1":
+                if allele == "CTTGGG":
+                    allele = "*"
+                allele = allele.replace("CTCCC","")
             alleles.append(allele)
         key = (read.get_tag("UB"), read.get_tag("CB"), intID, *alleles)
         umi_counts[key] += 1
@@ -138,7 +140,7 @@ def call_alleles_bulk(bam, barcode_start, barcode_end, sites, min_reads=10, extr
     for col in sites.keys():
         alleles = alleles[~alleles[col].str.contains("N")]
     if "EMX1" in alleles.columns:
-        alleles["EMX1"] = alleles["EMX1"].replace("CTTGGG", "-")
+        alleles["EMX1"] = alleles["EMX1"].replace("CTTGGG", "*")
     alleles["readCount"] = 1
     alleles = alleles.groupby(["intID"] + list(sites.keys())).agg({"readCount": "sum"}).reset_index()
     alleles = alleles.query(f"readCount >= {min_reads}")

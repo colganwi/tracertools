@@ -1,3 +1,4 @@
 from .alleles_from_bam_script import alleles_from_bam
 from .count_integrations_script import count_integrations
 from .edit_fractions_script import edit_fractions
+from .edit_frequencies_script import edit_frequencies

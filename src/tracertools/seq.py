@@ -1,10 +1,13 @@
+import multiprocessing as mp
 import re
 from collections.abc import Sequence
+from functools import partial
 
 import Levenshtein
 import numpy as np
 import pandas as pd
 import pysam
+import tqdm as tqdm
 from sklearn.mixture import GaussianMixture
 
 from .config import edit_ids
@@ -37,7 +40,7 @@ def insertion_from_alignment(sequence, cigar, pos, ref_begin=0, window=2):
     if ref_pos < pos:
         return None
     elif insertions == "":
-        return "-"
+        return "*"
     return insertions
 
 
@@ -117,62 +120,147 @@ def select_allele(allele, sites=["RNF2", "HEK3", "EMX1"]):
     else:
         return allele
 
-
 def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> pd.DataFrame:
-    """Resolve alleles with conflicting sequencing reads."""
+    """Resolve alleles with conflicting sequencing reads (memory optimized)."""
+    if df.empty:
+        return df
+
     if sites is None:
         default_sites = ["RNF2", "HEK3", "EMX1"]
         sites = [c for c in default_sites if c in df.columns]
+    else:
+        sites = [c for c in sites if c in df.columns]
+
     keys = ["intID", "cellBC"]
-    out = df.copy()
-    gc_keys = out.groupby(keys, sort=False)
-    out["n_alleles"] = gc_keys["intID"].transform("size")
-    g2 = out[out["n_alleles"] == 2].copy()
-    if g2.empty or not sites:
+    if not sites:
+        # still need to add n_alleles like original
+        n_alleles = df.groupby(keys, sort=False)["intID"].transform("size")
+        out = df.copy(deep=False)
+        out["n_alleles"] = n_alleles
         return out
-    g2_gc = g2.groupby(keys, sort=False)
-    # total uniques
-    u_total = g2_gc[sites].nunique(dropna=True)
-    g2_masked = g2.copy()
-    for s in sites:
-        g2_masked[s] = g2_masked[s].where(g2_masked[s] != "-")
-    u_non_none = g2_masked.groupby(keys, sort=False)[sites].nunique(dropna=True)
-    # does the pair contain a literal '-' for each site?
-    has_none = g2.groupby(keys, sort=False)[sites].apply(lambda df_: df_.eq("-").any(axis=0))
-    # resolvable if pair is {x, '-'}
+
+    # Compute n_alleles WITHOUT copying whole df first
+    n_alleles = df.groupby(keys, sort=False)["intID"].transform("size")
+    out = df.copy(deep=False)  # shallow view; we only add one column
+    out["n_alleles"] = n_alleles
+
+    # Work only on the n_alleles==2 subset
+    g2 = out[out["n_alleles"] == 2]
+    if g2.empty:
+        return out
+
+    # Grouped nunique on just the sites columns (smaller than whole frame)
+    g2g = g2.groupby(keys, sort=False)
+
+    # total uniques (including '*')
+    u_total = g2g[sites].nunique(dropna=True)
+
+    # uniques excluding '*' (treat '*' as NA) computed without copying all of g2
+    # This creates an intermediate sites-only block, not a full df copy.
+    sites_block = g2[sites].mask(g2[sites].eq("*"))
+    u_non_none = sites_block.groupby([g2[k] for k in keys], sort=False).nunique(dropna=True)
+    u_non_none.index.names = keys
+
+    # whether the pair contains literal '*' for each site (vectorized)
+    has_none = g2g[sites].agg(lambda s: (s == "*").any())
+
+    # resolvable if pair is {x, '*'} at that site
     resolvable = (u_total.eq(2)) & (u_non_none.eq(1)) & has_none
-    # any conflict (>1 distinct non-'None' values at any site)?
+
+    # any conflict anywhere (>1 distinct non-'*' values)
     conflict_any = (u_non_none > 1).any(axis=1)
+
     # good pairs: exactly one resolvable site, no conflicts elsewhere
     edit_counts = resolvable.sum(axis=1)
     good_pairs = (~conflict_any) & (edit_counts == 1)
-    if not good_pairs.any():
+    if not bool(good_pairs.any()):
         return out
-    good_idx = resolvable.index[good_pairs]
-    idx_mask = g2.set_index(keys).index.isin(good_idx)
+
+    good_idx = resolvable.index[good_pairs]  # MultiIndex of (intID, cellBC)
+
+    # Identify rows in g2 that belong to the "good" groups, without building a big temp df
+    g2_idx = pd.MultiIndex.from_frame(g2[keys], names=keys)
+    idx_mask = g2_idx.isin(good_idx)
+
     to_collapse = g2.loc[idx_mask]
-    num_cols = [c for c in ["UMI", "readCount", "frac"] if c in g2.columns]
-    excluded = set(keys + list(sites) + ["n_alleles"] + num_cols)
-    keep_first_cols = [c for c in g2.columns if c not in excluded]
-    agg_dict = {c: "sum" for c in num_cols}
-    agg_dict.update({c: "first" for c in keep_first_cols})
-    collapsed = to_collapse.groupby(keys, sort=False).agg(agg_dict).reset_index()
-
-    def pick_site(col: str) -> pd.Series:
-        subset = to_collapse[[*keys, col]]
-        pref = subset[subset[col] != "-"].dropna().drop_duplicates(subset=keys).set_index(keys)[col]
-        uniq = subset.dropna().drop_duplicates(subset=keys + [col]).groupby(keys, sort=False)[col].first()
-        out_series = uniq.copy()
-        out_series.loc[pref.index] = pref
-        return out_series
-
-    for s in sites:
-        collapsed[s] = pick_site(s).reindex(collapsed.set_index(keys).index).values
-    collapsed["n_alleles"] = 1
     unresolved_pairs = g2.loc[~idx_mask]
     not_two = out[out["n_alleles"] != 2]
-    result = pd.concat([not_two, unresolved_pairs, collapsed], ignore_index=True)
-    return result
+
+    # Aggregate other columns
+    num_cols = [c for c in ("UMI", "readCount", "frac") if c in to_collapse.columns]
+    excluded = set(keys) | set(sites) | {"n_alleles"} | set(num_cols)
+    keep_first_cols = [c for c in to_collapse.columns if c not in excluded]
+
+    agg_dict = {c: "sum" for c in num_cols}
+    for c in keep_first_cols:
+        agg_dict[c] = "first"
+
+    collapsed = to_collapse.groupby(keys, sort=False).agg(agg_dict)
+
+    # Pick site values with minimal extra memory:
+    # mask '*' -> NA, take first non-NA per group, fill remaining with '*'
+    for s in sites:
+        picked = to_collapse[s].mask(to_collapse[s] == "*").groupby(
+            [to_collapse[k] for k in keys], sort=False
+        ).first()
+        picked.index.names = keys
+        collapsed[s] = picked.reindex(collapsed.index).fillna("*").to_numpy()
+
+    collapsed["n_alleles"] = 1
+    collapsed = collapsed.reset_index()
+
+    # Final concat
+    return pd.concat([not_two, unresolved_pairs, collapsed], ignore_index=True, copy=False)
+
+
+def _init_worker(df, sites):
+    global _DF, _SITES
+    _DF = df
+    _SITES = sites
+
+def _resolve_alleles_worker(intID):
+    # No copy here; resolve_alleles only shallow-copies when adding a column.
+    sub = _DF[_DF["intID"] == intID]
+    return resolve_alleles(sub, sites=_SITES)
+
+def resolve_alleles_parallel(
+    df: pd.DataFrame,
+    sites=None,
+    threads: int = 10,
+    chunksize: int = 20,
+    concat_batch: int = 50,
+) -> pd.DataFrame:
+    """Resolve alleles in parallel with minimized peak memory."""
+    unique_ids = df["intID"].unique()
+
+    # Prefer fork when available (Linux) to leverage copy-on-write and avoid pickling df.
+    # On macOS/Windows this will fall back to spawn semantics.
+    try:
+        ctx = mp.get_context("fork")
+    except ValueError:
+        ctx = mp.get_context()
+
+    with ctx.Pool(
+        processes=threads,
+        initializer=_init_worker,
+        initargs=(df, sites),
+        maxtasksperchild=200,  # helps long runs avoid fragmentation
+    ) as pool:
+        it = pool.imap(_resolve_alleles_worker, unique_ids, chunksize=chunksize)
+
+        # Chunked concat: reduces peak RAM vs list(results) then single concat
+        out_chunks = []
+        buf = []
+        for res in tqdm.tqdm(it, total=len(unique_ids), desc="Resolving alleles"):
+            buf.append(res)
+            if len(buf) >= concat_batch:
+                out_chunks.append(pd.concat(buf, ignore_index=True, copy=False))
+                buf.clear()
+
+        if buf:
+            out_chunks.append(pd.concat(buf, ignore_index=True, copy=False))
+
+    return pd.concat(out_chunks, ignore_index=True, copy=False)
 
 
 def read_sam(file, verbose=False):
@@ -201,36 +289,37 @@ def read_sam(file, verbose=False):
     return df
 
 
-def alleles_to_characters(alleles, edit_ids=edit_ids, min_prob=None, other_id=9, order=None, index="cellBC"):
+def alleles_to_characters(alleles, edit_ids=edit_ids, min_prob=None, other_id="!", order=None, index="cellBC"):
     """Convert allele table to character matrix"""
     characters = alleles.copy()
     if isinstance(index, str):
         index = [index]
     # Map alleles to characters
     for site, mapping in edit_ids.items():
-        characters[site] = characters[site].map(mapping).fillna(other_id).astype(int)
+        characters[site] = characters[site].map(mapping).fillna(other_id)
         if min_prob is not None and f"{site}_prob" in characters.columns:
-            characters.loc[characters[f"{site}_prob"] < min_prob, site] = -1
+            characters.loc[characters[f"{site}_prob"] < min_prob, site] = "-"
     characters = pd.melt(
         characters[index + ["intID"] + list(edit_ids.keys())],
         id_vars=index + ["intID"],
         var_name="site",
         value_name="allele",
     )
-    characters = characters.pivot_table(index=index, columns=["intID", "site"], values="allele").fillna(-1).astype(int)
+    characters = characters.pivot_table(index=index, columns=["intID", "site"], values="allele", aggfunc="first").fillna("-")
 
     # sort by max allele fraction
     def max_fraction(int_id):
         int_data = characters.xs(int_id, level=0, axis=1)
         counts = int_data.apply(pd.Series.value_counts, axis=0).fillna(0)
         total_counts = counts.sum(axis=0)
-        valid_counts = counts.loc[lambda x: x.index > 0]  # Exclude -1 and 0
+        valid_counts = counts.loc[lambda x: x.index > "-"] # Exclude - and *
         max_fraction_value = (valid_counts / total_counts).max().max()
         return max_fraction_value
 
     if order is None:
         order = sorted(characters.columns.levels[0], key=max_fraction, reverse=True)
     characters = characters.reindex(order, level=0, axis=1)
+
     # Reindex
     characters.columns = [f"{intID}-{site}" for intID, site in characters.columns]
     return characters

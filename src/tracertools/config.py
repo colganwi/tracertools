@@ -1,3 +1,5 @@
+import random
+import string
 from pathlib import Path
 
 import matplotlib.colors as mcolors
@@ -227,9 +229,8 @@ discrete_colors = {
 discrete_cmap = {k: sns.color_palette(v) for k, v in discrete_colors.items()}
 
 # Edit colors
-edit_palette = {"-1": "white"}
-edit_palette.update({str(i): discrete_cmap[8][i - 1] for i in range(1, 9)})
-edit_palette.update({"0": "lightgray", "9": "#505050"})
+edit_palette = {str(i): discrete_cmap[8][i - 1] for i in range(1, 9)}
+edit_palette.update({ "!": "#505050","*":"lightgray","-": "white"})
 edit_cmap = mcolors.ListedColormap(["white", "lightgray"] + list(discrete_cmap[8]))
 full_edit_cmap = mcolors.ListedColormap(["white", "lightgray"] + list(discrete_cmap[8]) + ["#505050"])
 
@@ -245,15 +246,20 @@ def set_theme(figsize=(3, 3), dpi=200):
 
 
 # Names
-preedited_clone_names = {0: "Normal", 1: "Clone 1", 2: "Clone 2", 3: "Clone 3", 4: "Clone 4"}
 site_ids = {"RNF2": 1, "HEK3": 2, "EMX1": 3}
 site_names = {"RNF2": "Edit site 1", "HEK3": "Edit site 2", "EMX1": "Edit site 3"}
 edit_ids = {
-    "EMX1": {"-": 0, "GGACA": 1, "ACAAT": 2, "CCCTA": 3, "AGTAC": 4, "CCGAT": 5, "CCTTT": 6, "ATCAA": 7, "ATTCG": 8},
-    "RNF2": {"-": 0, "ACAGT": 1, "ACTTA": 2, "TTCCT": 3, "TATAT": 4, "GTTCA": 5, "TGCCA": 6, "TCCAA": 7, "ACTCC": 8},
-    "HEK3": {"-": 0, "GATAG": 1, "AATCG": 2, "GCAAG": 3, "GCGCC": 4, "CTTTG": 5, "ATCAA": 6, "CTCTC": 7, "ATTTA": 8},
+    "EMX1": {"GGACA": "1", "ACAAT": "2", "CCCTA": "3", "AGTAC": "4", "CCGAT": "5", "CCTTT": "6", "ATCAA": "7", "ATTCG": "8", "*": "*"},
+    "RNF2": {"ACAGT": "1", "ACTTA": "2", "TTCCT": "3", "TATAT": "4", "GTTCA": "5", "TGCCA": "6", "TCCAA": "7", "ACTCC": "8", "*": "*"},
+    "HEK3": {"GATAG": "1", "AATCG": "2", "GCAAG": "3", "GCGCC": "4", "CTTTG": "5", "ATCAA": "6", "CTCTC": "7", "ATTTA": "8", "*": "*"},
 }
 edit_names = {}
 for site in edit_ids:
-    edit_names[site] = {edit: f"LM {edit_ids[site][edit]}" for edit in edit_ids[site] if edit != "-"}
-    edit_names[site].update({"-": "Unedited"})
+    edit_names[site] = {edit: f"LM {edit_ids[site][edit]}" for edit in edit_ids[site] if edit != "*"}
+    edit_names[site].update({"*": "Unedited"})
+
+def node_name_generator():
+    """Generate unique node names for solvers"""
+    chars = string.ascii_letters + string.digits
+    while True:
+        yield ''.join(random.choices(chars, k=8))

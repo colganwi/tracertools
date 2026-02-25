@@ -22,6 +22,11 @@ def main():
         parents=[scripts.edit_fractions_script.get_parser()],
         help="Calculate edit fractions from allele counts files",
     )
+    subparsers.add_parser(
+        "edit-frequencies",
+        parents=[scripts.edit_frequencies_script.get_parser()],
+        help="Calculate edit frequencies from allele counts files",
+    )
 
     # Parse arguments and dispatch the function
     args = parser.parse_args()

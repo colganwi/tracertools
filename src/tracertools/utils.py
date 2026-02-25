@@ -4,32 +4,9 @@ import numpy as np
 import pandas as pd
 from numba import njit
 from pycea.utils import get_leaves, get_root
+from .config import node_name_generator
 
-NUM_TO_AA = {
-    0: "A",
-    1: "R",
-    2: "N",
-    3: "D",
-    4: "C",
-    5: "Q",
-    6: "E",
-    7: "G",
-    8: "H",
-    9: "I",
-    10: "L",
-    11: "K",
-    12: "M",
-    13: "F",
-    14: "P",
-    15: "S",
-    16: "T",
-    17: "W",
-    18: "Y",
-    19: "V",
-    -1: "-",
-}
-AAS = [NUM_TO_AA[i] for i in range(20)]
-
+AAS = ["A", "R", "N", "D", "C", "Q", "E", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"]
 
 def save_edit_distance(number_of_states: int, basepath: str) -> None:
     """Generate a random edit distance matrix with eigen decomposition.
@@ -88,20 +65,25 @@ def save_edit_distance(number_of_states: int, basepath: str) -> None:
         f.write("\n")
 
 
-def save_characters_fasta(character_matrix: pd.DataFrame, path: str) -> None:
+def save_characters_fasta(characters: pd.DataFrame, path: str, missing_state: str = "-") -> None:
     """Save the character matrix as a FASTA file.
 
     Parameters
     ----------
-    character_matrix : pd.DataFrame
+    characters : pd.DataFrame
         The character matrix to save.
     path : str
         The path to the output FASTA file.
     """
+    vals = characters.values.ravel().tolist()
+    if len(set(vals) - {missing_state}) > 20:
+        raise ValueError("More than 20 unique character states found (excluding missing state).")
+    mapping = dict(zip(sorted(set(vals) - {missing_state}), AAS, strict=False))
+    mapping[missing_state] = "-"
     with open(path, "w") as f:
-        for i in range(character_matrix.shape[0]):
-            aa_seq = "".join(character_matrix.iloc[i].map(NUM_TO_AA))
-            f.write(f">{character_matrix.index[i]}\n{aa_seq}\n")
+        for i in range(characters.shape[0]):
+            aa_seq = "".join(characters.iloc[i].map(mapping))
+            f.write(f">{characters.index[i]}\n{aa_seq}\n")
 
 
 def tree_to_newick(
@@ -162,6 +144,7 @@ def _safe_label(name: str) -> str:
 def newick_to_tree(
     newick: str,
     length_attr: str | None = "length",
+    node_name_gen: callable = node_name_generator(),
     midpoint_root: bool = False,
 ) -> nx.DiGraph:
     """Parse Newick via ete3 and return a directed NetworkX DiGraph).
@@ -194,14 +177,15 @@ def newick_to_tree(
 
     # assign stable names
     for n in T.traverse("preorder"):
-        n.add_feature("_nx_name", node_name(n))
+        if not n.name or not n.name.strip():
+            n.name = next(node_name_gen)
 
     # add edges parent->child, with optional branch lengths from child.dist
     for n in T.traverse("preorder"):
-        parent = n._nx_name
+        parent = n.name
         G.add_node(parent)
         for c in n.children:
-            child = c._nx_name
+            child = c.name
             if length_attr is not None:
                 G.add_edge(parent, child, **{length_attr: float(getattr(c, "dist", 0.0) or 0.0)})
             else:
@@ -261,3 +245,22 @@ def mask_truncal_edits(characters):
             if fraction < 0.95:
                 masked_characters[column] = characters[column]
     return pd.DataFrame(masked_characters)
+
+def select_characters(characters, max_saturation=0.95, max_missing=0.5, missing_state = "-", unedited_state = "*"):
+    """Select characters based on missing data and saturation."""
+    n_cells = characters.shape[0]
+    use_characters = []
+    for column in characters.columns:
+        n_missing = (characters[column] == missing_state).sum()
+        if n_missing / n_cells > max_missing:
+            continue
+        edit_counts = characters[characters[column] != missing_state][column].value_counts()
+        if (edit_counts.index[0] == unedited_state):
+            if (edit_counts.values[0] == (n_cells - n_missing)):
+                continue
+            use_characters.append(column)
+        elif (edit_counts.values[0] + n_missing) / n_cells > max_saturation:
+            continue
+        else:
+            use_characters.append(column)
+    return use_characters
