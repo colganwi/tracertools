@@ -4,9 +4,11 @@ import numpy as np
 import pandas as pd
 from numba import njit
 from pycea.utils import get_leaves, get_root
+
 from .config import node_name_generator
 
 AAS = ["A", "R", "N", "D", "C", "Q", "E", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"]
+
 
 def save_edit_distance(number_of_states: int, basepath: str) -> None:
     """Generate a random edit distance matrix with eigen decomposition.
@@ -246,7 +248,8 @@ def mask_truncal_edits(characters):
                 masked_characters[column] = characters[column]
     return pd.DataFrame(masked_characters)
 
-def select_characters(characters, max_saturation=0.95, max_missing=0.5, missing_state = "-", unedited_state = "*"):
+
+def select_characters(characters, max_saturation=0.95, max_missing=0.5, missing_state="-", unedited_state="*"):
     """Select characters based on missing data and saturation."""
     n_cells = characters.shape[0]
     use_characters = []
@@ -255,8 +258,8 @@ def select_characters(characters, max_saturation=0.95, max_missing=0.5, missing_
         if n_missing / n_cells > max_missing:
             continue
         edit_counts = characters[characters[column] != missing_state][column].value_counts()
-        if (edit_counts.index[0] == unedited_state):
-            if (edit_counts.values[0] == (n_cells - n_missing)):
+        if edit_counts.index[0] == unedited_state:
+            if edit_counts.values[0] == (n_cells - n_missing):
                 continue
             use_characters.append(column)
         elif (edit_counts.values[0] + n_missing) / n_cells > max_saturation:

@@ -7,10 +7,11 @@ import numpy as np
 import pandas as pd
 
 from .config import node_name_generator
-from .utils import save_characters_fasta, save_edit_distance, newick_to_tree
 from .root import centroid, character_outgroup
+from .utils import newick_to_tree, save_characters_fasta, save_edit_distance
 
 Mutation = tuple[str, str]  # (column, value)
+
 
 def _connect_leaves(tree):
     new = tree.copy()
@@ -18,10 +19,11 @@ def _connect_leaves(tree):
         if tree.out_degree(node) == 0:
             for child in data["descendants"]:
                 if data.get("doublet", False):
-                    new.add_node(child,depth=data.get("depth",0)+1,parent = node, doublet=True)
-                new.add_node(child,depth=data.get("depth",0)+1,parent = node)
+                    new.add_node(child, depth=data.get("depth", 0) + 1, parent=node, doublet=True)
+                new.add_node(child, depth=data.get("depth", 0) + 1, parent=node)
                 new.add_edge(node, child)
     return new
+
 
 def n_mutation_greedy(
     characters: pd.DataFrame,
@@ -136,7 +138,7 @@ def n_mutation_greedy(
     def _match_set_with_missing(
         parent_idx: np.ndarray,
         mutations: list[Mutation],
-        max_mismatch_frac: float = .1,
+        max_mismatch_frac: float = 0.1,
     ) -> set[int]:
         """
         Row indices that match all but at most ONE mutation, where '-' counts as a match.
@@ -156,7 +158,7 @@ def n_mutation_greedy(
             j = col_to_idx[col]
             col_vals = characters[parent_idx, j]
             matches = (col_vals == val) | (col_vals == "-")
-            mismatches += (~matches)
+            mismatches += ~matches
 
         mask = mismatches <= max_mismatches
         return parent_idx[mask]
@@ -198,7 +200,7 @@ def n_mutation_greedy(
             # '-' counts as a match
             dash_count = int((col_vals == "-").sum())
 
-            if (best_count + dash_count > cutoff) & (best_count > cutoff * .95) & (best_val != "9"):
+            if (best_count + dash_count > cutoff) & (best_count > cutoff * 0.95) & (best_val != "9"):
                 result.add((col_label, str(best_val)))
 
         return result
@@ -242,17 +244,17 @@ def n_mutation_greedy(
             for m in sorted_muts:
                 if _jaccard(base_set, mut_sets[m]) > jaccard_threshold:
                     split_muts.add(m)
-                #if len(split_muts) >= min_mutations:
+                # if len(split_muts) >= min_mutations:
                 #    break
 
             if len(split_muts) < min_mutations:
                 continue
 
             # Expand split mutation set with high-prevalence mutations
-            child_idx = _match_set_with_missing(parent_idx, split_muts, max_mismatch_frac = 0)
+            child_idx = _match_set_with_missing(parent_idx, split_muts, max_mismatch_frac=0)
             split_muts = _high_prevalence_mutations(child_idx, threshold=overlap_threshold)
-            #split_muts.update(additional_muts)
-            child_idx  = _match_set_with_missing(parent_idx, split_muts, max_mismatch_frac=0.02)
+            # split_muts.update(additional_muts)
+            child_idx = _match_set_with_missing(parent_idx, split_muts, max_mismatch_frac=0.02)
 
             if len(child_idx) >= min_clade_size:
                 return split_muts, child_idx
@@ -285,11 +287,11 @@ def n_mutation_greedy(
             # Peel off child clade
             child_cell_ids = cell_ids[child_idx]
             child_id = next(node_name_gen)
-            tree.add_node(child_id, descendants=list(child_cell_ids),depth = depth + 1, stump = True)
+            tree.add_node(child_id, descendants=list(child_cell_ids), depth=depth + 1, stump=True)
             tree.add_edge(node_id, child_id)
 
             # Recurse on child with updated used set
-            if depth < max_depth -1:
+            if depth < max_depth - 1:
                 _split_clade(child_id, child_idx, split_muts, depth + 1)
             n_splits += 1
 
@@ -298,11 +300,11 @@ def n_mutation_greedy(
 
         # Mark remaining as doublet if small enough
         if (len(remaining) < len(parent_idx) * doublet_threshold) and remaining:
-                residual_idx = np.fromiter(remaining, dtype=int)
-                child_cell_ids = cell_ids[residual_idx]
-                child_id = next(node_name_gen)
-                tree.add_node(child_id, descendants=list(child_cell_ids), doublet=True, depth=depth + 1, stump = True)
-                tree.add_edge(node_id, child_id)
+            residual_idx = np.fromiter(remaining, dtype=int)
+            child_cell_ids = cell_ids[residual_idx]
+            child_id = next(node_name_gen)
+            tree.add_node(child_id, descendants=list(child_cell_ids), doublet=True, depth=depth + 1, stump=True)
+            tree.add_edge(node_id, child_id)
         # Otherwise, stop splitting
         else:
             tree.remove_nodes_from(nx.descendants(tree, node_id))
@@ -313,10 +315,16 @@ def n_mutation_greedy(
 
     # Root clade contains all cells
     root_id = next(node_name_gen)
-    tree.add_node(root_id, descendants=list(cell_ids), depth=0, stump = True)
+    tree.add_node(root_id, descendants=list(cell_ids), depth=0, stump=True)
     _split_clade(root_id, np.arange(n_cell, dtype=int), truncal_muts=set(), depth=0)
-    doublets = np.array([cell_id for node in tree.nodes if
-                         tree.nodes[node].get("doublet", False) for cell_id in tree.nodes[node]["descendants"]])
+    doublets = np.array(
+        [
+            cell_id
+            for node in tree.nodes
+            if tree.nodes[node].get("doublet", False)
+            for cell_id in tree.nodes[node]["descendants"]
+        ]
+    )
     if connect_leaves:
         tree = _connect_leaves(tree)
         for node in tree.nodes:
@@ -324,6 +332,7 @@ def n_mutation_greedy(
                 del tree.nodes[node]["descendants"]
 
     return tree, doublets
+
 
 def fasttree(
     characters: pd.DataFrame,

@@ -1,14 +1,13 @@
-from collections import Counter
 import os
 import subprocess
 import tempfile
+from collections import Counter
 
 import cassiopeia as cas
 import networkx as nx
 import numpy as np
 import pandas as pd
 import pycea
-import treedata as td
 
 from .config import node_name_generator
 from .utils import bfs_names, mask_truncal_edits, newick_to_tree, save_characters_fasta, save_edit_distance
@@ -22,6 +21,7 @@ def get_root(tree):
 def get_leaves(tree: nx.DiGraph):
     """Finds the leaves of a tree"""
     return [node for node in nx.dfs_postorder_nodes(tree, get_root(tree)) if tree.out_degree(node) == 0]
+
 
 def split_tree(tree: nx.DiGraph, node_name_gen: callable = node_name_generator()):
     """
@@ -74,7 +74,9 @@ def indices_of_most_common(lst):
     return [i for i, x in enumerate(lst) if x == val] if count > 1 else None
 
 
-def collapse_mutationless_edges(tree, key="characters", mutation_key=None, rescue_edges = False,node_name_gen= node_name_generator(), copy=False):
+def collapse_mutationless_edges(
+    tree, key="characters", mutation_key=None, rescue_edges=False, node_name_gen=node_name_generator(), copy=False
+):
     """Collapse mutationless edges"""
     if copy:
         tree = tree.copy()
@@ -98,9 +100,7 @@ def collapse_mutationless_edges(tree, key="characters", mutation_key=None, rescu
             if len(children) > 2:
                 for i in range(n_characters):
                     if tree.nodes[node][key][i] == "*":
-                        idx_same_edit = indices_of_most_common(
-                            [tree.nodes[child][key][i] for child in children]
-                        )
+                        idx_same_edit = indices_of_most_common([tree.nodes[child][key][i] for child in children])
                         if idx_same_edit is not None:
                             # create new internal node
                             new_node = next(node_name_gen)
@@ -301,11 +301,11 @@ def estimate_branch_lengths(
     key_added: str = "time",
     solver: str = "CLARABEL",
     verbose: bool = False,
-    missing_state = "-",
-    unedited_state = "*",
-    mutation_rates = None,
-    pseudo_count = 0.5,
-    total_time = 1.0,
+    missing_state="-",
+    unedited_state="*",
+    mutation_rates=None,
+    pseudo_count=0.5,
+    total_time=1.0,
 ):
     """Estimate branch lengths using IIDExponentialMLE
 
@@ -323,9 +323,10 @@ def estimate_branch_lengths(
     tdata : the modified TreeData object if copy is True
     """
     from convexml._iid_exponential_mle import IIDExponentialMLE
+
     leaves = get_leaves(tree)
-    chr_to_int = {str(i):i for i in range(9)}
-    chr_to_int.update({missing_state:-1, unedited_state:0, "!":9})
+    chr_to_int = {str(i): i for i in range(9)}
+    chr_to_int.update({missing_state: -1, unedited_state: 0, "!": 9})
     node_states = {}
     for node in tree.nodes:
         char_states = tree.nodes[node][key]
@@ -334,9 +335,13 @@ def estimate_branch_lengths(
     cas_tree = cas.data.CassiopeiaTree(character_matrix=characters, tree=tree)
     cas_tree.set_all_character_states(node_states)
     if mutation_rates is not None:
-        mutation_rates = mutation_rates * int(characters.shape[1]/len(mutation_rates))
+        mutation_rates = mutation_rates * int(characters.shape[1] / len(mutation_rates))
     IIDExponentialMLE(
-        verbose=verbose, solver=solver, minimum_branch_length=minimum_branch_length, relative_mutation_rates=mutation_rates, pseudo_mutations_per_edge = pseudo_count
+        verbose=verbose,
+        solver=solver,
+        minimum_branch_length=minimum_branch_length,
+        relative_mutation_rates=mutation_rates,
+        pseudo_mutations_per_edge=pseudo_count,
     ).estimate_branch_lengths(cas_tree)
     node_times = nx.get_node_attributes(cas_tree.get_tree_topology(), "time")
     if total_time is not None:
@@ -356,7 +361,8 @@ def collapse_unifurcations(G: nx.DiGraph, allow_root: bool = True) -> nx.DiGraph
     while changed:
         changed = False
         to_contract = [
-            n for n in list(G.nodes())
+            n
+            for n in list(G.nodes())
             if G.out_degree(n) == 1 and (G.in_degree(n) == 1 or (allow_root and G.in_degree(n) == 0))
         ]
         if not to_contract:
@@ -378,7 +384,8 @@ def collapse_unifurcations(G: nx.DiGraph, allow_root: bool = True) -> nx.DiGraph
             changed = True
     return G
 
-def replace_subtrees(tree: nx.DiGraph, replacements: list[nx.DiGraph], error_on_missing = False) -> nx.DiGraph:
+
+def replace_subtrees(tree: nx.DiGraph, replacements: list[nx.DiGraph], error_on_missing=False) -> nx.DiGraph:
     """
     Replace subtrees of `tree` with the given replacement trees.
 
@@ -418,15 +425,14 @@ def replace_subtrees(tree: nx.DiGraph, replacements: list[nx.DiGraph], error_on_
                 tree.nodes[root].update(data)
             else:
                 if n in tree:
-                    raise ValueError(
-                        f"Node {n!r} from replacement subtree already exists in base tree"
-                    )
+                    raise ValueError(f"Node {n!r} from replacement subtree already exists in base tree")
                 tree.add_node(n, **data)
         # --- add edges from replacement ---
         for u, v, data in replacement.edges(data=True):
             # In R, root r has no incoming edges, so we only add its outgoing edges
             tree.add_edge(u, v, **data)
     return tree
+
 
 def ancestral_characters(
     tree: nx.DiGraph,
@@ -454,9 +460,7 @@ def ancestral_characters(
     key_added
         Node attribute key where reconstructed characters are stored.
     """
-    alphabet, val_to_idx, cost_matrix = _build_cost_matrix(
-        characters, missing_state, unedited_state, reedit_penalty
-    )
+    alphabet, val_to_idx, cost_matrix = _build_cost_matrix(characters, missing_state, unedited_state, reedit_penalty)
 
     n_chars = characters.shape[1]
     n_states = len(alphabet)
@@ -493,6 +497,7 @@ def _build_cost_matrix(characters, missing_state, unedited_state, reedit_penalty
     val_to_idx = {v: i for i, v in enumerate(alphabet)}
     return alphabet, val_to_idx, M
 
+
 def _reconstruct_sankoff_weighted(
     tree: nx.DiGraph,
     key: str,
@@ -512,9 +517,9 @@ def _reconstruct_sankoff_weighted(
     postorder = list(nx.dfs_postorder_nodes(tree, root))
 
     # DP matrices
-    scores = {}       # node -> (n_states, n_chars)
-    sizes = {}        # node -> subtree size
-    pointers = {}     # node -> (n_states, n_children, n_chars)
+    scores = {}  # node -> (n_states, n_chars)
+    sizes = {}  # node -> subtree size
+    pointers = {}  # node -> (n_states, n_children, n_chars)
 
     # Upward pass -------------------------------------------------------------
 
@@ -524,7 +529,7 @@ def _reconstruct_sankoff_weighted(
         # LEAF
         if not ch:
             leaf_vals = np.array(tree.nodes[node][key])
-            leaf_missing = (leaf_vals == missing)
+            leaf_missing = leaf_vals == missing
 
             # Inflate to (n_states × n_chars)
             S = np.full((n_states, n_chars), np.inf)
@@ -547,7 +552,7 @@ def _reconstruct_sankoff_weighted(
 
         # Vectorized DP for each child
         for i, child in enumerate(ch):
-            c_scores = scores[child]          # (n_states, n_chars)
+            c_scores = scores[child]  # (n_states, n_chars)
             c_size = sizes[child]
             total_size += c_size
             weight = np.log2(1 + c_size)
@@ -558,8 +563,8 @@ def _reconstruct_sankoff_weighted(
             weighted = c_scores[None, :, :] + weight * cost_matrix[:, :, None]
 
             # Choose s that minimizes cost for each (p, char)
-            best_idx = np.argmin(weighted, axis=1)              # (n_states, n_chars)
-            best_cost = weighted[np.arange(n_states)[:,None], best_idx, np.arange(n_chars)[None,:]]
+            best_idx = np.argmin(weighted, axis=1)  # (n_states, n_chars)
+            best_cost = weighted[np.arange(n_states)[:, None], best_idx, np.arange(n_chars)[None, :]]
 
             node_scores += best_cost
             ptrs[:, i, :] = best_idx
@@ -588,15 +593,15 @@ def _reconstruct_sankoff_weighted(
         if node not in pointers:
             continue
 
-        ptrs = pointers[node]   # (n_states, n_children, n_chars)
+        ptrs = pointers[node]  # (n_states, n_children, n_chars)
 
         for child_idx, child in enumerate(children[node]):
             child_assign = ptrs[parent_states, child_idx, np.arange(n_chars)]
             tree.nodes[child][key] = [alphabet[i] for i in child_assign]
             stack.append((child, child_assign))
 
+
 def count_branch_edits(tree, key="characters"):
     for u, v in tree.edges():
         n = sum(a != b for a, b in zip(tree.nodes[u][key], tree.nodes[v][key]))
         tree.edges[u, v]["n_edits"] = n
-
