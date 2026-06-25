@@ -7,8 +7,17 @@ import numpy as np
 import pandas as pd
 
 from .config import node_name_generator
-from .utils import save_characters_fasta, save_edit_distance, newick_to_tree
+from .utils import (
+    save_characters_fasta,
+    save_characters_csv,
+    save_edit_distance,
+    newick_to_tree,
+    tree_to_newick,
+    get_leaves,
+    get_root,
+)
 from .root import centroid, character_outgroup
+from .tree import collapse_unifurcations
 
 Mutation = tuple[str, str]  # (column, value)
 
@@ -279,7 +288,7 @@ def n_mutation_greedy(
             current_idx = np.fromiter(remaining, dtype=int)
             clade_min_mutations = min_mutations if (n_splits == 0 or depth == 0) else min_mutations - 1
             split_muts, child_idx = _find_best_split(current_idx, truncal_muts, clade_min_mutations)
-            if (split_muts is None) or (len(child_idx) == len(parent_idx)):
+            if (split_muts is None) or ((len(child_idx) == len(parent_idx)) & depth > 0):
                 break
 
             # Peel off child clade
@@ -304,7 +313,7 @@ def n_mutation_greedy(
                 tree.add_node(child_id, descendants=list(child_cell_ids), doublet=True, depth=depth + 1, stump = True)
                 tree.add_edge(node_id, child_id)
         # Otherwise, stop splitting
-        else:
+        elif len(remaining) > 0:
             tree.remove_nodes_from(nx.descendants(tree, node_id))
 
         # Stop splitting if >3 splits detected
@@ -395,5 +404,197 @@ def fasttree(
             tree = character_outgroup(tree, characters, new_root=root_name)
         else:
             raise ValueError(f"Unknown root_method: {root_method}")
+
+    return tree
+
+
+def _resolve_polytomies(
+    tree: nx.DiGraph,
+    node_name_gen: callable = node_name_generator(),
+) -> nx.DiGraph:
+    """Arbitrarily resolve polytomies so every internal node has <= 2 children.
+
+    LAML-Pro requires a rooted *binary* tree as input. This peels off children
+    of any node with > 2 children into a caterpillar of new internal nodes.
+    """
+    tree = tree.copy()
+    for node in list(tree.nodes):
+        children = list(tree.successors(node))
+        while len(children) > 2:
+            c1 = children.pop()
+            c2 = children.pop()
+            new_node = next(node_name_gen)
+            tree.add_node(new_node)
+            for c in (c1, c2):
+                attrs = tree.get_edge_data(node, c) or {}
+                tree.remove_edge(node, c)
+                tree.add_edge(new_node, c, **attrs)
+            tree.add_edge(node, new_node)
+            children.append(new_node)
+    return tree
+
+
+def laml(
+    characters: pd.DataFrame,
+    initial_tree: nx.DiGraph,
+    mode: str = "search",
+    mutation_priors: dict[str, float] | dict[str, dict[str, float]] | None = None,
+    ultrametric: bool = True,
+    max_iterations: int = 2500,
+    temp: float = 0.1,
+    min_branch_length: float = 0.01,
+    seed: int = 73,
+    threads: int = 10,
+    missing_state: str = "-",
+    unedited_state: str = "*",
+    node_name_gen: callable = node_name_generator(),
+    lamlpro_cmd: str = "lamlpro",
+    logfile: str | None = None,
+) -> nx.DiGraph:
+    """Reconstruct a lineage tree with LAML-Pro (maximum likelihood PMMO model).
+
+    LAML-Pro requires an initial rooted tree (e.g. from :func:`fasttree`). Its
+    topology and branch lengths are then optimized (``mode="search"``) or only the
+    branch lengths are fit (``mode="optimize"``) under the PMMO model. The
+    LAML-Pro Python API is not used (it is buggy); the ``lamlpro`` command-line
+    tool is invoked instead.
+
+    Parameters
+    ----------
+    characters : pd.DataFrame
+        String-encoded character matrix. Index = cell IDs, columns = sites.
+        ``unedited_state`` = no mutation, ``missing_state`` = missing, anything
+        else = a specific mutation state.
+    initial_tree : nx.DiGraph
+        Initial rooted tree. Its leaves must match ``characters.index`` (order does
+        not matter). Polytomies are resolved arbitrarily, since LAML-Pro requires a
+        binary tree.
+    mode : str
+        ``"search"`` to optimize topology + branch lengths, ``"optimize"`` to fit
+        only branch lengths for the initial topology.
+    mutation_priors : dict, optional
+        Prior mutation probabilities, either as ``{state: probability}`` (applied to
+        every character) or ``{column: {state: probability}}`` (per character).
+        States must use the same string encoding as ``characters``.
+    ultrametric : bool
+        Enforce equal root-to-leaf path lengths.
+    max_iterations : int
+        Maximum hill-climbing iterations (search mode).
+    temp : float
+        Starting temperature for the simulated-annealing topology search.
+    min_branch_length : float
+        Minimum branch length relative to a scaled tree of unit height.
+    seed : int
+        Random seed for reproducibility.
+    threads : int
+        Number of threads.
+    missing_state, unedited_state : str
+        Encoding of missing and unedited states.
+    node_name_gen : Callable
+        Generator yielding unique node IDs.
+    lamlpro_cmd : str
+        Path to / name of the ``lamlpro`` binary.
+    logfile : Optional[str]
+        If set, console output from LAML-Pro is appended to this file.
+
+    Returns
+    -------
+    nx.DiGraph
+        Rooted tree with branch lengths stored on the ``"length"`` edge attribute
+        and cumulative root-to-node times stored on the ``"time"`` node attribute.
+    """
+    if mode not in {"search", "optimize"}:
+        raise ValueError("mode must be 'search' or 'optimize'.")
+    number_of_states = len(set(characters.values.ravel().tolist()) - {missing_state, unedited_state})
+    if number_of_states == 0:
+        raise ValueError("characters contains no mutations.")
+
+    # Validate that the initial tree's leaves match the character matrix.
+    leaves = set(get_leaves(initial_tree))
+    cells = set(characters.index)
+    if leaves != cells:
+        raise ValueError(
+            "initial_tree leaves must match characters.index "
+            f"({len(leaves - cells)} extra leaves, {len(cells - leaves)} missing)."
+        )
+
+    # LAML-Pro requires a rooted binary tree: collapse unifurcations (out_degree 1)
+    # and resolve polytomies (out_degree > 2) so every internal node bifurcates.
+    initial_tree = collapse_unifurcations(initial_tree.copy(), allow_root=True)
+    initial_tree = _resolve_polytomies(initial_tree, node_name_gen=node_name_gen)
+    input_root = get_root(initial_tree)
+
+    with tempfile.TemporaryDirectory() as td:
+        matrix_path = os.path.join(td, "character_matrix.csv")
+        tree_path = os.path.join(td, "initial_tree.nwk")
+        priors_path = os.path.join(td, "mutation_priors.csv")
+        out_prefix = os.path.join(td, "lamlpro")
+        out_tree_path = f"{out_prefix}_tree.newick"
+
+        mapping = save_characters_csv(
+            characters, matrix_path, missing_state=missing_state, unedited_state=unedited_state
+        )
+        # Write internal node names so that, in optimize mode, LAML-Pro preserves
+        # them and the output node names match the input tree.
+        with open(tree_path, "w") as f:
+            f.write(tree_to_newick(initial_tree, record_node_names=True) + "\n")
+
+        priors_flag = ""
+        if mutation_priors is not None:
+            # A flat {state: prob} dict is applied to every character; a nested
+            # {column: {state: prob}} dict specifies priors per character.
+            if all(not isinstance(v, dict) for v in mutation_priors.values()):
+                mutation_priors = {col: mutation_priors for col in characters.columns}
+            col_to_idx = {col: i for i, col in enumerate(characters.columns)}
+            with open(priors_path, "w") as f:
+                for col, states in mutation_priors.items():
+                    for state, prob in states.items():
+                        f.write(f"{col_to_idx[col]},{mapping[state]},{prob}\n")
+            priors_flag = f"--mutation-priors {priors_path} "
+
+        cmd = (
+            f"bash -c '. ~/.bashrc && "
+            f"{lamlpro_cmd} "
+            f"--matrix {matrix_path} "
+            f"--tree {tree_path} "
+            f"--output {out_prefix} "
+            f"--data-type character-matrix "
+            f"--mode {mode} "
+            f"--max-iterations {max_iterations} "
+            f"--temp {temp} "
+            f"--min-branch-length {min_branch_length} "
+            f"--seed {seed} "
+            f"--threads {threads} "
+            f"{priors_flag}"
+            f"{'--ultrametric ' if ultrametric else ''}'"
+        )
+
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        if logfile:
+            with open(logfile, "ab") as lf:
+                lf.write(stdout or b"")
+                lf.write(stderr or b"")
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"LAML-Pro failed (code {process.returncode}). Stderr:\n{stderr.decode('utf-8')}"
+            )
+
+        with open(out_tree_path) as f:
+            newick_str = f.read().strip()
+        tree = newick_to_tree(newick_str, node_name_gen=node_name_gen)
+
+    # LAML-Pro preserves the input rooting; tidy it up and restore the root name.
+    tree = collapse_unifurcations(tree, allow_root=True)
+    root = get_root(tree)
+    if root != input_root:
+        tree = nx.relabel_nodes(tree, {root: input_root})
+
+    # Record branch lengths as cumulative root-to-node "time" attributes (root = 0),
+    # matching the convention used by estimate_branch_lengths.
+    times = {input_root: 0.0}
+    for parent, child in nx.bfs_edges(tree, input_root):
+        times[child] = times[parent] + tree[parent][child].get("length", 0.0)
+    nx.set_node_attributes(tree, times, "time")
 
     return tree

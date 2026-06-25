@@ -86,6 +86,44 @@ def save_characters_fasta(characters: pd.DataFrame, path: str, missing_state: st
             f.write(f">{characters.index[i]}\n{aa_seq}\n")
 
 
+def save_characters_csv(
+    characters: pd.DataFrame,
+    path: str,
+    missing_state: str = "-",
+    unedited_state: str = "*",
+) -> dict[str, int]:
+    """Save the character matrix as a LAML-Pro character matrix CSV.
+
+    LAML-Pro expects an ``n_cells``-by-``m_characters`` CSV where the first column
+    is the cell name, ``0`` denotes the unedited (root) state, integers ``1..k``
+    denote mutation states, and ``?`` denotes missing data.
+
+    Parameters
+    ----------
+    characters : pd.DataFrame
+        String-encoded character matrix (index = cell IDs, columns = sites).
+    path : str
+        Path to the output CSV file.
+    missing_state : str
+        Value representing missing data.
+    unedited_state : str
+        Value representing the unedited (root) state.
+
+    Returns
+    -------
+    mapping : dict[str, int]
+        Mapping from string state to integer state used in the CSV (so that, e.g.,
+        mutation priors can be encoded with the same integer states).
+    """
+    vals = set(characters.values.ravel().tolist()) - {missing_state, unedited_state}
+    mapping: dict[str, int] = {unedited_state: 0}
+    mapping.update({state: i + 1 for i, state in enumerate(sorted(vals))})
+    full_mapping = {**mapping, missing_state: "?"}
+    encoded = characters.apply(lambda col: col.map(full_mapping))
+    encoded.to_csv(path, index=True, index_label="cell")
+    return mapping
+
+
 def tree_to_newick(
     tree: nx.DiGraph,
     record_branch_lengths: bool = False,

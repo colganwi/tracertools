@@ -23,31 +23,92 @@ def get_leaves(tree: nx.DiGraph):
     """Finds the leaves of a tree"""
     return [node for node in nx.dfs_postorder_nodes(tree, get_root(tree)) if tree.out_degree(node) == 0]
 
-def split_tree(tree: nx.DiGraph, node_name_gen: callable = node_name_generator()):
+def split_tree(
+    tree: nx.DiGraph,
+    threshold: int | None = None,
+    root=None,
+    node_name_gen: callable = node_name_generator(),
+    characters_key: str = "characters",
+    root_state="*",
+):
     """
-    Split a rooted tree into subtrees, one per child of the root.
+    Split a rooted tree into subtrees.
 
-    Parameters
-    ----------
-    tree : nx.DiGraph
-        A directed tree with a single root (in-degree 0).
-    node_name_gen : callable
-        A generator function for naming nodes in the subtrees.
+    Default behavior matches the original version: split into one subtree per
+    child of the root.
 
-    Returns
-    -------
-    list[nx.DiGraph]
-        List of DiGraphs, each being the subtree rooted at one child of the root.
+    If threshold is provided, traverse from the root and split at edges where
+    n_edits >= threshold.
     """
-    # find root (node with in-degree 0)
-    root = get_root(tree)
+    if root is None:
+        root = get_root(tree)
 
     subtrees = []
-    for child in tree.successors(root):
-        nodes = {child} | nx.descendants(tree, child)
-        subtree = tree.subgraph(nodes).copy()
-        subtree.add_edge(next(node_name_gen), child)
-        subtrees.append(subtree)
+
+    def _add_artificial_root(subtree, child):
+        new_root = next(node_name_gen)
+
+        if characters_key in subtree.nodes[child]:
+            n_characters = len(subtree.nodes[child][characters_key])
+            subtree.add_node(
+                new_root,
+                **{characters_key: [root_state] * n_characters},
+            )
+        else:
+            subtree.add_node(new_root)
+
+        subtree.add_edge(new_root, child)
+        return subtree
+
+    # Default behavior: split once at children of root
+    if threshold is None:
+        for child in tree.successors(root):
+            nodes = {child} | nx.descendants(tree, child)
+            subtree = tree.subgraph(nodes).copy()
+            subtree = _add_artificial_root(subtree, child)
+            subtrees.append(subtree)
+
+        return subtrees
+
+    # Threshold behavior
+    for u, v in tree.edges:
+        tree.edges[u, v]["n_edits"] = np.sum(
+            np.array(tree.nodes[v][characters_key])
+            != np.array(tree.nodes[u][characters_key])
+        )
+
+    stack = [root]
+
+    while stack:
+        u = stack.pop()
+
+        for v in tree.successors(u):
+            n_edits = tree.edges[u, v].get("n_edits", 0)
+
+            if n_edits >= threshold:
+                children = list(tree.successors(v))
+
+                c1_descendants = (
+                    len(nx.descendants(tree, children[0])) if len(children) == 2 else 0
+                )
+                c2_descendants = (
+                    len(nx.descendants(tree, children[1])) if len(children) == 2 else 0
+                )
+
+                if (
+                    ((c1_descendants > 20) or (c2_descendants > 20))
+                    and ((c1_descendants < 5) or (c2_descendants < 5))
+                ):
+                    stack.append(v)
+                else:
+                    nodes = {v} | nx.descendants(tree, v)
+                    subtree = tree.subgraph(nodes).copy()
+                    subtree = _add_artificial_root(subtree, v)
+                    subtrees.append(subtree)
+            else:
+                stack.append(v)
+
+    subtrees.sort(key=lambda t: t.number_of_nodes(), reverse=True)
     return subtrees
 
 
@@ -165,113 +226,6 @@ def identify_mutations(tdata, tree="tree", key="characters", key_added="has_muta
     if copy:
         return tdata
 
-
-def reconstruct_fasttree(
-    character_matrix: pd.DataFrame,
-    mutation_rate: float = 0.1,
-    number_of_states: int = 10,
-    add_root: bool = False,
-    fasttree_cmd: str = "FastTree",
-    logfile: str | None = None,
-) -> nx.DiGraph:
-    """Reconstruct a lineage tree with FastTree.
-
-    Parameters
-    ----------
-    character_matrix : pd.DataFrame
-        Rows = samples (index), cols = sites, values in 0..number_of_states-1 or -1.
-    mutation_rate : float
-    number_of_states : int (<= 20)
-    add_root : bool
-        If True, midpoint-root the ete3 tree (using set_outgroup(get_midpoint_outgroup())).
-    fasttree_cmd : str
-    logfile : Optional[str]
-
-    Returns
-    -------
-    nx.DiGraph
-    """
-    # validation
-    if not (0 <= mutation_rate <= 1):
-        raise ValueError("mutation_rate must be between 0 and 1.")
-    if number_of_states > 20:
-        raise ValueError("number_of_states must be <= 20.")
-    if character_matrix.isnull().values.any():
-        raise ValueError("character_matrix contains NaNs; use -1 for missing.")
-
-    vals = character_matrix.values
-    if not np.isin(vals[vals != -1], np.arange(number_of_states)).all():
-        raise ValueError("character_matrix has values outside 0..number_of_states-1 (excluding -1).")
-
-    detected = np.unique(vals[vals != -1])
-    if len(detected) != number_of_states:
-        raise ValueError(f"Detected {len(detected)} states, but number_of_states={number_of_states}.")
-
-    with tempfile.TemporaryDirectory() as td:
-        fasta_path = os.path.join(td, "character_matrix.fasta")
-        edit_base = os.path.join(td, "edit_distance")
-        tree_path = os.path.join(td, "tree.nwck")
-
-        save_edit_distance(number_of_states, edit_base)
-        save_characters_fasta(character_matrix, fasta_path)
-
-        cmd = (
-            f"bash -c '. ~/.bashrc && "
-            f"{fasttree_cmd} -nosupport -noml -nome "
-            f"-matrix {edit_base} "
-            f"{fasta_path} > {tree_path}'"
-        )
-
-        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if logfile:
-            with open(logfile, "ab") as lf:
-                lf.write(stdout or b"")
-                lf.write(stderr or b"")
-        if process.returncode != 0:
-            raise RuntimeError(f"FastTree failed (code {process.returncode}). Stderr:\n{stderr.decode('utf-8')}")
-        # Read and (optionally) root with ete3
-        with open(tree_path) as f:
-            newick_str = f.read().strip()
-            tree = newick_to_tree(newick_str, midpoint_root=True if add_root else False)
-
-    return tree
-
-
-def reconstruct_cassiopeia(characters, solver="upgma"):
-    """Reconstruct a tree using cassiopeia"""
-    solvers = {
-        "nj": cas.solver.NeighborJoiningSolver(
-            cas.solver.dissimilarity.weighted_hamming_distance, add_root=True, fast=True
-        ),
-        "upgma": cas.solver.UPGMASolver(cas.solver.dissimilarity.weighted_hamming_distance, fast=True),
-        "greedy": cas.solver.VanillaGreedySolver(),
-    }
-    cas_tree = cas.data.CassiopeiaTree(character_matrix=characters)
-    solvers[solver].solve(cas_tree)
-    tree = cas_tree.get_tree_topology()
-    tree = nx.relabel_nodes(tree, bfs_names(tree))
-    return tree
-
-
-def reconstruct_tree(
-    tdata, solver="fasttree", key="characters", tree_added="tree", mask_truncal=True, logfile=None, copy=False
-):
-    """Reconstruct a tree from characters optionally estimating branch lengths"""
-    if copy:
-        tdata = tdata.copy()
-    characters = tdata.obsm[key]
-    if mask_truncal:
-        characters = mask_truncal_edits(characters).copy()
-    if solver == "fasttree":
-        tree = reconstruct_fasttree(characters, add_root=True, logfile=logfile)
-    else:
-        tree = reconstruct_cassiopeia(characters, solver=solver)
-    tdata.obst[tree_added] = tree
-    if copy:
-        return tdata
-
-
 def estimate_leaf_fitness(tdata, tree="tree", depth_key="depth", key_added="fitness", copy=False):
     """Estimate leaf fitness based on tree and branch lengths"""
     tree_key = tree
@@ -297,6 +251,7 @@ def estimate_leaf_fitness(tdata, tree="tree", depth_key="depth", key_added="fitn
 def estimate_branch_lengths(
     tree: nx.DiGraph,
     key: str = "characters",
+    method: str = "convexml",
     minimum_branch_length=0.001,
     key_added: str = "time",
     solver: str = "CLARABEL",
@@ -306,42 +261,69 @@ def estimate_branch_lengths(
     mutation_rates = None,
     pseudo_count = 0.5,
     total_time = 1.0,
+    lamlpro_cmd: str = "lamlpro",
 ):
-    """Estimate branch lengths using IIDExponentialMLE
+    """Estimate branch lengths for a tree.
 
     Parameters
     ----------
     tree : the tree to estimate branch lengths for
-    key : the key for the character matrix in tdata.obsm
-    key_added : the key for the added branch lengths in tdata.obst
-    solver : the solver to use for IIDExponentialMLE
+    key : the node attribute holding the character states
+    method : 'convexml' (IIDExponentialMLE, default) or 'laml' (LAML-Pro optimize mode)
+    minimum_branch_length : minimum branch length (convexml only)
+    key_added : the node attribute to store the estimated times under
+    solver : the solver to use for IIDExponentialMLE (convexml only)
     verbose : whether to print verbose output
-    copy : whether to copy the TreeData object
-
-    Returns
-    -------
-    tdata : the modified TreeData object if copy is True
+    missing_state, unedited_state : encoding of missing and unedited states
+    mutation_rates : relative mutation rates (convexml only)
+    pseudo_count : pseudo mutations per edge (convexml only)
+    total_time : root-to-leaf time the tree is scaled to (None to leave unscaled)
+    lamlpro_cmd : path to / name of the ``lamlpro`` binary (laml only)
     """
-    from convexml._iid_exponential_mle import IIDExponentialMLE
     leaves = get_leaves(tree)
-    chr_to_int = {str(i):i for i in range(9)}
-    chr_to_int.update({missing_state:-1, unedited_state:0, "!":9})
-    node_states = {}
-    for node in tree.nodes:
-        char_states = tree.nodes[node][key]
-        node_states[node] = [chr_to_int[char] for char in char_states]
-    characters = pd.DataFrame(node_states).T.loc[leaves]
-    cas_tree = cas.data.CassiopeiaTree(character_matrix=characters, tree=tree)
-    cas_tree.set_all_character_states(node_states)
-    if mutation_rates is not None:
-        mutation_rates = mutation_rates * int(characters.shape[1]/len(mutation_rates))
-    IIDExponentialMLE(
-        verbose=verbose, solver=solver, minimum_branch_length=minimum_branch_length, relative_mutation_rates=mutation_rates, pseudo_mutations_per_edge = pseudo_count
-    ).estimate_branch_lengths(cas_tree)
-    node_times = nx.get_node_attributes(cas_tree.get_tree_topology(), "time")
-    if total_time is not None:
-        for node in node_times:
-            node_times[node] = node_times[node] * total_time
+    if method == "convexml":
+        from convexml._iid_exponential_mle import IIDExponentialMLE
+        chr_to_int = {str(i):i for i in range(9)}
+        chr_to_int.update({missing_state:-1, unedited_state:0, "!":9})
+        node_states = {}
+        for node in tree.nodes:
+            char_states = tree.nodes[node][key]
+            node_states[node] = [chr_to_int[char] for char in char_states]
+        characters = pd.DataFrame(node_states).T.loc[leaves]
+        cas_tree = cas.data.CassiopeiaTree(character_matrix=characters, tree=tree)
+        cas_tree.set_all_character_states(node_states)
+        if mutation_rates is not None:
+            mutation_rates = mutation_rates * int(characters.shape[1]/len(mutation_rates))
+        IIDExponentialMLE(
+            verbose=verbose, solver=solver, minimum_branch_length=minimum_branch_length, relative_mutation_rates=mutation_rates, pseudo_mutations_per_edge = pseudo_count
+        ).estimate_branch_lengths(cas_tree)
+        node_times = nx.get_node_attributes(cas_tree.get_tree_topology(), "time")
+        if total_time is not None:
+            for node in node_times:
+                node_times[node] = node_times[node] * total_time
+    elif method == "laml":
+        from .solver import laml
+        characters = pd.DataFrame(
+            {leaf: list(tree.nodes[leaf][key]) for leaf in leaves}
+        ).T
+        laml_tree = laml(
+            characters,
+            tree,
+            mode="optimize",
+            ultrametric=True,
+            missing_state=missing_state,
+            unedited_state=unedited_state,
+            lamlpro_cmd=lamlpro_cmd,
+        )
+        node_times = nx.get_node_attributes(laml_tree, "time")
+        if total_time is not None:
+            height = max(node_times.values())
+            if height > 0:
+                scale = total_time / height
+                for node in node_times:
+                    node_times[node] = node_times[node] * scale
+    else:
+        raise ValueError(f"Unknown method: {method}. Use 'convexml' or 'laml'.")
     nx.set_node_attributes(tree, node_times, key_added)
 
 
