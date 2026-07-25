@@ -314,6 +314,7 @@ def estimate_branch_lengths(
             missing_state=missing_state,
             unedited_state=unedited_state,
             lamlpro_cmd=lamlpro_cmd,
+            min_branch_length=minimum_branch_length,
         )
         node_times = nx.get_node_attributes(laml_tree, "time")
         if total_time is not None:
@@ -322,6 +323,12 @@ def estimate_branch_lengths(
                 scale = total_time / height
                 for node in node_times:
                     node_times[node] = node_times[node] * scale
+        # A root unifurcation (root -> single child) is collapsed inside laml, so the
+        # original root is absent from node_times. It marks time 0 (the founder), and
+        # its child's time is the LAML-estimated time before the first division.
+        root = get_root(tree)
+        if root not in node_times:
+            node_times[root] = 0.0
     else:
         raise ValueError(f"Unknown method: {method}. Use 'convexml' or 'laml'.")
     nx.set_node_attributes(tree, node_times, key_added)

@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 
+import ete3
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -501,7 +502,9 @@ def laml(
     -------
     nx.DiGraph
         Rooted tree with branch lengths stored on the ``"length"`` edge attribute
-        and cumulative root-to-node times stored on the ``"time"`` node attribute.
+        and cumulative node times on the ``"time"`` node attribute. Each LAML-Pro
+        branch length is the time before that node, so the root's time is its own
+        stem branch length and each child's time adds the branch leading into it.
     """
     if mode not in {"search", "optimize"}:
         raise ValueError("mode must be 'search' or 'optimize'.")
@@ -583,6 +586,10 @@ def laml(
         with open(out_tree_path) as f:
             newick_str = f.read().strip()
         tree = newick_to_tree(newick_str, node_name_gen=node_name_gen)
+        # LAML-Pro assigns each node a branch length equal to the time before that
+        # node. The root's branch length (the stem before the first division) is not
+        # stored as an edge, so read it directly to seed the root's time.
+        root_length = float(ete3.Tree(newick_str, format=1).dist or 0.0)
 
     # LAML-Pro preserves the input rooting; tidy it up and restore the root name.
     tree = collapse_unifurcations(tree, allow_root=True)
@@ -590,9 +597,9 @@ def laml(
     if root != input_root:
         tree = nx.relabel_nodes(tree, {root: input_root})
 
-    # Record branch lengths as cumulative root-to-node "time" attributes (root = 0),
-    # matching the convention used by estimate_branch_lengths.
-    times = {input_root: 0.0}
+    # Record branch lengths as cumulative node "time" attributes. The root's time is
+    # its own stem branch length; each child adds the branch length leading into it.
+    times = {input_root: root_length}
     for parent, child in nx.bfs_edges(tree, input_root):
         times[child] = times[parent] + tree[parent][child].get("length", 0.0)
     nx.set_node_attributes(tree, times, "time")
