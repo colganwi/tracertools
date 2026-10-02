@@ -279,6 +279,15 @@ def estimate_branch_lengths(
     pseudo_count : pseudo mutations per edge (convexml only)
     total_time : root-to-leaf time the tree is scaled to (None to leave unscaled)
     lamlpro_cmd : path to / name of the ``lamlpro`` binary (laml only)
+
+    Notes
+    -----
+    For ``method="laml"``, ancestral character states are also inferred (LAML-Pro
+    computes edit-state posteriors as part of branch length estimation) and written
+    to every node's ``key`` attribute, overwriting any prior values there (e.g. from
+    :func:`ancestral_characters`) with LAML-Pro's posterior most-likely states. This
+    lets :func:`collapse_mutationless_edges` be run after branch length estimation
+    rather than before, as with ``convexml``.
     """
     leaves = get_leaves(tree)
     if method == "convexml":
@@ -329,6 +338,10 @@ def estimate_branch_lengths(
         root = get_root(tree)
         if root not in node_times:
             node_times[root] = 0.0
+        node_characters = nx.get_node_attributes(laml_tree, "characters")
+        if root not in node_characters:
+            node_characters[root] = [unedited_state] * characters.shape[1]
+        nx.set_node_attributes(tree, node_characters, key)
     else:
         raise ValueError(f"Unknown method: {method}. Use 'convexml' or 'laml'.")
     nx.set_node_attributes(tree, node_times, key_added)

@@ -8,6 +8,7 @@ import seaborn as sns
 
 # Paths
 base_path = Path(__file__).resolve().parent.parent.parent
+package_path = Path(__file__).resolve().parent
 
 # Default colors
 colors = [
@@ -238,7 +239,7 @@ full_edit_cmap = mcolors.ListedColormap(["white", "lightgray"] + list(discrete_c
 # Default style
 def set_theme(figsize=(3, 3), dpi=200):
     """Set the default style for the plots"""
-    plt.style.use(base_path / "plot.mplstyle")
+    plt.style.use(package_path / "plot.mplstyle")
     plt.rcParams["svg.fonttype"] = "none"
     plt.rcParams["figure.figsize"] = figsize
     plt.rcParams["figure.dpi"] = 200

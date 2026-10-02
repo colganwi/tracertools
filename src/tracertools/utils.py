@@ -86,6 +86,37 @@ def save_characters_fasta(characters: pd.DataFrame, path: str, missing_state: st
             f.write(f">{characters.index[i]}\n{aa_seq}\n")
 
 
+def character_state_mapping(
+    characters: pd.DataFrame,
+    missing_state: str = "-",
+    unedited_state: str = "*",
+) -> dict[str, int]:
+    """Map string character states to LAML-Pro integer codes.
+
+    ``0`` denotes the unedited (root) state; integers ``1..k`` denote mutation
+    states, assigned in sorted order across the whole matrix (shared alphabet
+    across all characters).
+
+    Parameters
+    ----------
+    characters : pd.DataFrame
+        String-encoded character matrix (index = cell IDs, columns = sites).
+    missing_state : str
+        Value representing missing data.
+    unedited_state : str
+        Value representing the unedited (root) state.
+
+    Returns
+    -------
+    mapping : dict[str, int]
+        Mapping from string state to integer state.
+    """
+    vals = set(characters.values.ravel().tolist()) - {missing_state, unedited_state}
+    mapping: dict[str, int] = {unedited_state: 0}
+    mapping.update({state: i + 1 for i, state in enumerate(sorted(vals))})
+    return mapping
+
+
 def save_characters_csv(
     characters: pd.DataFrame,
     path: str,
@@ -115,13 +146,52 @@ def save_characters_csv(
         Mapping from string state to integer state used in the CSV (so that, e.g.,
         mutation priors can be encoded with the same integer states).
     """
-    vals = set(characters.values.ravel().tolist()) - {missing_state, unedited_state}
-    mapping: dict[str, int] = {unedited_state: 0}
-    mapping.update({state: i + 1 for i, state in enumerate(sorted(vals))})
+    mapping = character_state_mapping(characters, missing_state=missing_state, unedited_state=unedited_state)
     full_mapping = {**mapping, missing_state: "?"}
     encoded = characters.apply(lambda col: col.map(full_mapping))
     encoded.to_csv(path, index=True, index_label="cell")
     return mapping
+
+
+# Sentinel LAML-Pro uses to flag a fully-missing observation (see include/constants.h).
+LAML_NEGATIVE_INFINITY = -1e8
+
+
+def save_observation_matrix_csv(
+    characters: pd.DataFrame,
+    path: str,
+    mapping: dict[str, int],
+    missing_state: str = "-",
+) -> None:
+    """Save the character matrix as a LAML-Pro *observation* matrix CSV.
+
+    Each observed (non-missing) state is encoded as a one-hot log-probability
+    vector (0.0 for the observed state, effectively -inf elsewhere), which is
+    mathematically equivalent to LAML-Pro's ``character-matrix`` data type but
+    lets LAML-Pro report ancestral-state posteriors, which it only writes for
+    ``observation-matrix`` input.
+
+    Parameters
+    ----------
+    characters : pd.DataFrame
+        String-encoded character matrix (index = cell IDs, columns = sites).
+    path : str
+        Path to the output CSV file.
+    mapping : dict[str, int]
+        String-to-integer state mapping, as returned by :func:`character_state_mapping`.
+    missing_state : str
+        Value representing missing data.
+    """
+    n_states = max(mapping.values()) + 1
+    prob_cols = [f"state{i}_prob" for i in range(n_states)]
+    rows = []
+    for site, col in enumerate(characters.columns):
+        for cell, state in characters[col].items():
+            probs = [LAML_NEGATIVE_INFINITY] * n_states
+            if state != missing_state:
+                probs[mapping[state]] = 0.0
+            rows.append((cell, site, 0, *probs))
+    pd.DataFrame(rows, columns=["cell_name", "target_site", "cassette_idx", *prob_cols]).to_csv(path, index=False)
 
 
 def tree_to_newick(

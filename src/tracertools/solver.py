@@ -10,8 +10,9 @@ import pandas as pd
 from .config import node_name_generator
 from .utils import (
     save_characters_fasta,
-    save_characters_csv,
     save_edit_distance,
+    character_state_mapping,
+    save_observation_matrix_csv,
     newick_to_tree,
     tree_to_newick,
     get_leaves,
@@ -435,6 +436,48 @@ def _resolve_polytomies(
     return tree
 
 
+def _default_mutation_priors(
+    characters: pd.DataFrame, missing_state: str, unedited_state: str
+) -> dict[str, dict[str, float]]:
+    """Uniform priors over the mutation states actually observed in each character.
+
+    Matches LAML-Pro's own default (``generate_uniform_priors`` in its
+    ``character-matrix`` code path) so that switching the on-disk data type to
+    ``observation-matrix`` (see :func:`laml`) does not change default behavior.
+    """
+    priors = {}
+    for col in characters.columns:
+        states_present = sorted(set(characters[col]) - {missing_state, unedited_state})
+        if states_present:
+            prob = 1.0 / len(states_present)
+            priors[col] = dict.fromkeys(states_present, prob)
+    return priors
+
+
+def _parse_posterior_argmax(
+    path: str, inverse_mapping: dict[int, str], missing_state: str
+) -> dict[str, list[str]]:
+    """Parse a LAML-Pro ``*_posterior_argmax.csv`` file into ``{node: [state, ...]}``.
+
+    State label ``-1`` denotes LAML-Pro's "silenced" hidden state (no informative
+    observation could be attributed to any editable state); it is decoded as
+    ``missing_state`` since it carries no information about the edited state.
+    """
+    with open(path) as f:
+        lines = f.read().splitlines()
+    # File starts with "Newick Tree:\n<newick>\n" before the header/data rows.
+    header_idx = next(i for i, line in enumerate(lines) if line.startswith("node,"))
+    node_states = {}
+    for line in lines[header_idx + 1 :]:
+        if not line:
+            continue
+        node, *labels = line.split(",")
+        node_states[node] = [
+            missing_state if int(label) == -1 else inverse_mapping[int(label)] for label in labels
+        ]
+    return node_states
+
+
 def laml(
     characters: pd.DataFrame,
     initial_tree: nx.DiGraph,
@@ -460,6 +503,16 @@ def laml(
     LAML-Pro Python API is not used (it is buggy); the ``lamlpro`` command-line
     tool is invoked instead.
 
+    Character states are passed to LAML-Pro as an ``observation-matrix`` (a
+    one-hot log-probability vector per cell/site) rather than as a
+    ``character-matrix``, since LAML-Pro only writes ancestral-state posteriors
+    for the former. A one-hot encoding of discrete states is mathematically
+    equivalent to LAML-Pro's ``character-matrix`` likelihood, so branch lengths
+    and parameter estimates are unaffected; the only added behavior is that
+    ancestral states (the posterior argmax at every node, including leaves) are
+    now recovered from ``{output}_posterior_argmax.csv`` and returned on the
+    ``"characters"`` node attribute, in the same string encoding as the input.
+
     Parameters
     ----------
     characters : pd.DataFrame
@@ -475,7 +528,9 @@ def laml(
         only branch lengths for the initial topology.
     mutation_priors : dict, optional
         Prior mutation probabilities, either as ``{state: probability}`` (applied to
-        every character) or ``{column: {state: probability}}`` (per character).
+        every character) or ``{column: {state: probability}}`` (per character). If
+        not given, defaults to a uniform prior over the states observed in each
+        character (LAML-Pro's own default for character-matrix input).
         States must use the same string encoding as ``characters``.
     ultrametric : bool
         Enforce equal root-to-leaf path lengths.
@@ -501,10 +556,12 @@ def laml(
     Returns
     -------
     nx.DiGraph
-        Rooted tree with branch lengths stored on the ``"length"`` edge attribute
-        and cumulative node times on the ``"time"`` node attribute. Each LAML-Pro
-        branch length is the time before that node, so the root's time is its own
-        stem branch length and each child's time adds the branch leading into it.
+        Rooted tree with branch lengths stored on the ``"length"`` edge attribute,
+        cumulative node times on the ``"time"`` node attribute, and the posterior
+        most-likely character states on the ``"characters"`` node attribute (for
+        every node, including leaves). Each LAML-Pro branch length is the time
+        before that node, so the root's time is its own stem branch length and
+        each child's time adds the branch leading into it.
     """
     if mode not in {"search", "optimize"}:
         raise ValueError("mode must be 'search' or 'optimize'.")
@@ -527,23 +584,27 @@ def laml(
     initial_tree = _resolve_polytomies(initial_tree, node_name_gen=node_name_gen)
     input_root = get_root(initial_tree)
 
+    if mutation_priors is None:
+        mutation_priors = _default_mutation_priors(characters, missing_state, unedited_state)
+
     with tempfile.TemporaryDirectory() as td:
-        matrix_path = os.path.join(td, "character_matrix.csv")
+        matrix_path = os.path.join(td, "observation_matrix.csv")
         tree_path = os.path.join(td, "initial_tree.nwk")
         priors_path = os.path.join(td, "mutation_priors.csv")
         out_prefix = os.path.join(td, "lamlpro")
         out_tree_path = f"{out_prefix}_tree.newick"
+        argmax_path = f"{out_prefix}_posterior_argmax.csv"
 
-        mapping = save_characters_csv(
-            characters, matrix_path, missing_state=missing_state, unedited_state=unedited_state
-        )
+        mapping = character_state_mapping(characters, missing_state=missing_state, unedited_state=unedited_state)
+        inverse_mapping = {i: state for state, i in mapping.items()}
+        save_observation_matrix_csv(characters, matrix_path, mapping, missing_state=missing_state)
         # Write internal node names so that, in optimize mode, LAML-Pro preserves
         # them and the output node names match the input tree.
         with open(tree_path, "w") as f:
             f.write(tree_to_newick(initial_tree, record_node_names=True) + "\n")
 
         priors_flag = ""
-        if mutation_priors is not None:
+        if mutation_priors:
             # A flat {state: prob} dict is applied to every character; a nested
             # {column: {state: prob}} dict specifies priors per character.
             if all(not isinstance(v, dict) for v in mutation_priors.values()):
@@ -561,7 +622,7 @@ def laml(
             f"--matrix {matrix_path} "
             f"--tree {tree_path} "
             f"--output {out_prefix} "
-            f"--data-type character-matrix "
+            f"--data-type observation-matrix "
             f"--mode {mode} "
             f"--max-iterations {max_iterations} "
             f"--temp {temp} "
@@ -590,11 +651,13 @@ def laml(
         # node. The root's branch length (the stem before the first division) is not
         # stored as an edge, so read it directly to seed the root's time.
         root_length = float(ete3.Tree(newick_str, format=1).dist or 0.0)
+        node_characters = _parse_posterior_argmax(argmax_path, inverse_mapping, missing_state)
 
     # LAML-Pro preserves the input rooting; tidy it up and restore the root name.
     tree = collapse_unifurcations(tree, allow_root=True)
     root = get_root(tree)
     if root != input_root:
+        node_characters[input_root] = node_characters.pop(root, node_characters.get(input_root))
         tree = nx.relabel_nodes(tree, {root: input_root})
 
     # Record branch lengths as cumulative node "time" attributes. The root's time is
@@ -603,5 +666,6 @@ def laml(
     for parent, child in nx.bfs_edges(tree, input_root):
         times[child] = times[parent] + tree[parent][child].get("length", 0.0)
     nx.set_node_attributes(tree, times, "time")
+    nx.set_node_attributes(tree, {n: s for n, s in node_characters.items() if n in tree.nodes}, "characters")
 
     return tree
