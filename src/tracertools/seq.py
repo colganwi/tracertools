@@ -1,7 +1,6 @@
 import multiprocessing as mp
 import re
 from collections.abc import Sequence
-from functools import partial
 
 import Levenshtein
 import numpy as np
@@ -120,6 +119,7 @@ def select_allele(allele, sites=["RNF2", "HEK3", "EMX1"]):
     else:
         return allele
 
+
 def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> pd.DataFrame:
     """Resolve alleles with conflicting sequencing reads (memory optimized)."""
     if df.empty:
@@ -191,7 +191,7 @@ def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> 
     excluded = set(keys) | set(sites) | {"n_alleles"} | set(num_cols)
     keep_first_cols = [c for c in to_collapse.columns if c not in excluded]
 
-    agg_dict = {c: "sum" for c in num_cols}
+    agg_dict = dict.fromkeys(num_cols, "sum")
     for c in keep_first_cols:
         agg_dict[c] = "first"
 
@@ -200,9 +200,7 @@ def resolve_alleles(df: pd.DataFrame, *, sites: Sequence[str] | None = None) -> 
     # Pick site values with minimal extra memory:
     # mask '*' -> NA, take first non-NA per group, fill remaining with '*'
     for s in sites:
-        picked = to_collapse[s].mask(to_collapse[s] == "*").groupby(
-            [to_collapse[k] for k in keys], sort=False
-        ).first()
+        picked = to_collapse[s].mask(to_collapse[s] == "*").groupby([to_collapse[k] for k in keys], sort=False).first()
         picked.index.names = keys
         collapsed[s] = picked.reindex(collapsed.index).fillna("*").to_numpy()
 
@@ -218,10 +216,12 @@ def _init_worker(df, sites):
     _DF = df
     _SITES = sites
 
+
 def _resolve_alleles_worker(intID):
     # No copy here; resolve_alleles only shallow-copies when adding a column.
     sub = _DF[_DF["intID"] == intID]
     return resolve_alleles(sub, sites=_SITES)
+
 
 def resolve_alleles_parallel(
     df: pd.DataFrame,
@@ -285,7 +285,7 @@ def read_sam(file, verbose=False):
     n = len(df)
     n_unmapped = sum(df["ref"] == "unmapped")
     if verbose:
-        print(f"{n} reads with {n_unmapped} unmapped ({n_unmapped/n*100:.2f}%)")
+        print(f"{n} reads with {n_unmapped} unmapped ({n_unmapped / n * 100:.2f}%)")
     return df
 
 
@@ -305,14 +305,16 @@ def alleles_to_characters(alleles, edit_ids=edit_ids, min_prob=None, other_id="!
         var_name="site",
         value_name="allele",
     )
-    characters = characters.pivot_table(index=index, columns=["intID", "site"], values="allele", aggfunc="first").fillna("-")
+    characters = characters.pivot_table(
+        index=index, columns=["intID", "site"], values="allele", aggfunc="first"
+    ).fillna("-")
 
     # sort by max allele fraction
     def max_fraction(int_id):
         int_data = characters.xs(int_id, level=0, axis=1)
         counts = int_data.apply(pd.Series.value_counts, axis=0).fillna(0)
         total_counts = counts.sum(axis=0)
-        valid_counts = counts.loc[lambda x: x.index > "-"] # Exclude - and *
+        valid_counts = counts.loc[lambda x: x.index > "-"]  # Exclude - and *
         max_fraction_value = (valid_counts / total_counts).max().max()
         return max_fraction_value
 
