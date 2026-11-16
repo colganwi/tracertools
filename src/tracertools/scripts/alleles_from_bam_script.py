@@ -86,7 +86,7 @@ def call_alleles_10x(param):
             if name == "EMX1":
                 if allele == "CTTGGG":
                     allele = "*"
-                allele = allele.replace("CTCCC","")
+                allele = allele.replace("CTCCC", "")
             alleles.append(allele)
         key = (read.get_tag("UB"), read.get_tag("CB"), intID, *alleles)
         umi_counts[key] += 1
@@ -104,7 +104,7 @@ def call_alleles_10x(param):
             .sort_values("readCount", ascending=False)
             .reset_index()
         )
-        agg_dict = {site: "first" for site in site_names}
+        agg_dict = dict.fromkeys(site_names, "first")
         agg_dict["readCount"] = "sum"
         allele_counts = allele_counts.groupby(["intID", "cellBC", "UMI"]).agg(agg_dict).reset_index()
         # collapse UMIs
@@ -122,7 +122,7 @@ def call_alleles_10x(param):
 def call_alleles_bulk(bam, barcode_start, barcode_end, sites, min_reads=10, extract_barcode=False):
     # Process reads
     bamfile = pysam.AlignmentFile(bam, "rb")
-    molecules = defaultdict(lambda: {**{name: None for name in sites.keys()}, "intID": None})
+    molecules = defaultdict(lambda: {**dict.fromkeys(sites.keys()), "intID": None})
     total_reads = bamfile.count()
     bamfile.reset()
     for read in tqdm(bamfile.fetch(until_eof=True), total=total_reads, mininterval=20, desc="TS"):

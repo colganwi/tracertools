@@ -1,9 +1,7 @@
 import argparse
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 
 
 def get_parser():
@@ -37,8 +35,8 @@ def edit_frequencies(path, sites, top_n, **kwargs):
         var_name="site",
         value_name="edit",
     )
-    edit_counts = long_counts.groupby(["site","edit","sample"])["readCount"].sum().reset_index()
-    edit_counts["rank"] = edit_counts.groupby(["site","sample"])["readCount"].rank(method="first", ascending=False)
+    edit_counts = long_counts.groupby(["site", "edit", "sample"])["readCount"].sum().reset_index()
+    edit_counts["rank"] = edit_counts.groupby(["site", "sample"])["readCount"].rank(method="first", ascending=False)
     edit_counts["edit"] = edit_counts.apply(lambda row: row["edit"] if row["rank"] <= top_n else "other", axis=1)
-    edit_counts = edit_counts.groupby(["site","edit","sample"])["readCount"].sum().reset_index()
+    edit_counts = edit_counts.groupby(["site", "edit", "sample"])["readCount"].sum().reset_index()
     edit_counts.to_csv(base_path / "edit_frequencies.csv")
