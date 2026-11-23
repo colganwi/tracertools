@@ -1,4 +1,3 @@
-
 import networkx as nx
 import pandas as pd
 
@@ -26,7 +25,7 @@ def reroot_on_edge(G: nx.DiGraph, new_root, best_edge):
 
     for p, c in nx.bfs_edges(U2, new_root):
         # copy attrs if present in either direction in original G
-        attrs = (G.get_edge_data(p, c) or G.get_edge_data(c, p) or {})
+        attrs = G.get_edge_data(p, c) or G.get_edge_data(c, p) or {}
         H.add_edge(p, c, **attrs)
 
     # Remove old root & any other unifurcations
@@ -95,7 +94,7 @@ def centroid(G: nx.DiGraph, new_root="root"):
     return reroot_on_edge(G, new_root, best_edge)
 
 
-def _get_character_outgroup(characters: pd.DataFrame, missing_state = "-", unedited_state = "*"):
+def _get_character_outgroup(characters: pd.DataFrame, missing_state="-", unedited_state="*"):
     """Identify outgroup based on characters."""
     best_col = None
     best_value = None
@@ -123,7 +122,7 @@ def character_outgroup(tree: nx.DiGraph, characters, new_root="root"):
     root = get_root(t)
     total_leaves = len(leaves)
     total_outgroup = len(outgroup)
-    nx.set_node_attributes(t, {leaf: {"total": 1,"outgroup": 0} for leaf in leaves})
+    nx.set_node_attributes(t, {leaf: {"total": 1, "outgroup": 0} for leaf in leaves})
     nx.set_node_attributes(t, {leaf: {"outgroup": 1} for leaf in outgroup})
     for node in nx.dfs_postorder_nodes(t, source=root):
         if node in leaves:
@@ -133,10 +132,14 @@ def character_outgroup(tree: nx.DiGraph, characters, new_root="root"):
         outgroup = sum(t.nodes[child]["outgroup"] for child in children)
         t.nodes[node]["total"] = total
         t.nodes[node]["outgroup"] = outgroup
+
     def _node_jaccard(node):
-        return max(t.nodes[node]["outgroup"] / (t.nodes[node]["total"] + total_outgroup - t.nodes[node]["outgroup"]),
-                     (total_outgroup - t.nodes[node]["outgroup"]) /
-                     (total_leaves - t.nodes[node]["total"] + total_outgroup - (total_outgroup - t.nodes[node]["outgroup"])))
+        return max(
+            t.nodes[node]["outgroup"] / (t.nodes[node]["total"] + total_outgroup - t.nodes[node]["outgroup"]),
+            (total_outgroup - t.nodes[node]["outgroup"])
+            / (total_leaves - t.nodes[node]["total"] + total_outgroup - (total_outgroup - t.nodes[node]["outgroup"])),
+        )
+
     best_jaccard = -1
     best_edge = None
     for u, v in t.edges():
